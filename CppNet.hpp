@@ -797,6 +797,8 @@ public:
 private:
 	void MfSendThread();											// 发送线程，循环调用send，收发线程根据是否可用标志确定行为
 	void MfRecvThread();											// 接收线程，循环调用recv，收发线程根据是否可用标志确定行为
+public:
+	bool RegMsg(std::string LinkName, int MsgId, MsgFunType fun);
 };
 
 CClientLinkManage::CClientLinkManage(int HeartSendInterval) :
@@ -996,6 +998,14 @@ void CClientLinkManage::MfRecvThread()
 		}
 		std::this_thread::sleep_for(std::chrono::milliseconds(1));
 	}
+}
+
+bool CClientLinkManage::RegMsg(std::string LinkName, int MsgId, MsgFunType fun)
+{
+	auto it = MdClientLinkList.find(LinkName);
+	if (it == MdClientLinkList.end())
+		return false;
+	return it->second->RegMsg(MsgId, fun);
 }
 
 class CServiceNoBlock

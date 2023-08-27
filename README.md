@@ -7,24 +7,22 @@
 
 linux需要链接pthread
 
-详细说明参考：https://blog.csdn.net/qq_43082206/article/details/110383165
-
-在原始代码经过一些修改，主体部分未修改
+详细说明参考：https://blog.csdn.net/qq_43082206/article/details/110383165，在原始代码经过一些修改，主体部分未修改
 
 Server:
-    CServiceEpoll S1(6, 1000, 5);                // 心跳间隔 最多连接多少个 开几个线程分摊
-    S1.Mf_Epoll_Start(0, 4567);                  // ip 和 端口 默认本机ip
-    或者
-    CServiceNoBlock S2(6, 1000, 5);
+    	CServiceEpoll S1(6, 1000, 5);                // 心跳间隔 最多连接多少个 开几个线程分摊
+    	S1.Mf_Epoll_Start(0, 4567);                  // ip 和 端口 默认本机ip
+    	或者
+    	CServiceNoBlock S2(6, 1000, 5);
 	S2.Mf_Epoll_Start(0, 4567);
-    S1.RegMsg(200, [](CSocketObj* Cli, void* Data, int len)                // ser注册200号消息,发送100号回复客户端
-        {
-            // Deal
-            Cli->MfSendMsg(100, (const char*)Data, len);
-        });
+    	S1.RegMsg(200, [](CSocketObj* Cli, void* Data, int len)                // ser注册200号消息,发送100号回复客户端
+        	{
+            	// Deal
+            	Cli->MfSendMsg(100, (const char*)Data, len);
+        	});
 
 Client:
-    CClientLinkManage Cli;
+    	CClientLinkManage Cli;
 	Cli.MfStart();
 
 	std::string L1("t1");

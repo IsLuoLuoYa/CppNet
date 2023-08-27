@@ -10,6 +10,7 @@ linux需要链接pthread
 详细说明参考：https://blog.csdn.net/qq_43082206/article/details/110383165，在原始代码经过一些修改，主体部分未修改
 
 Server:
+
     	CServiceEpoll S1(6, 1000, 5);                // 心跳间隔 最多连接多少个 开几个线程分摊
     	S1.Mf_Epoll_Start(0, 4567);                  // ip 和 端口 默认本机ip
     	或者
@@ -22,9 +23,9 @@ Server:
         	});
 
 Client:
+
     	CClientLinkManage Cli;
 	Cli.MfStart();
-
 	std::string L1("t1");
 	std::string L2("t2");
 	Cli.MfCreateAddLink(L1, "192.168.56.101", 4567);       // 连接名字 ip 端口

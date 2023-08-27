@@ -674,6 +674,7 @@ private:
 	std::string				MdLinkName;			// 服务名称，内容
 	CSocketObj* MdClientSock = 0;	// 客户连接对象
 	std::atomic<int>		MdIsConnect = 0;	// 表示是否连接成功	
+	std::map<int, MsgFunType> MsgDealFuncMap;
 private:
 public:
 	CClientLink(std::string s) {};
@@ -691,6 +692,24 @@ public:
 	const char* MfGetRecvBufferP()						/*供使用者处理数据，取得接收缓冲区原始指针*/ { return MdClientSock->MfGetRecvBufP(); }
 	bool MfHasMsg()										/*供使用者处理数据，缓冲区是否有消息*/ { return MdClientSock->MfHasMsg(); }
 	void MfPopFrontMsg()								/*供使用者处理数据，第一条信息移出缓冲区*/ { MdClientSock->MfPopFrontMsg(); }
+
+public:
+	bool RegMsg(int MsgId, MsgFunType fun)
+	{
+		if (MsgDealFuncMap.find(MsgId) != MsgDealFuncMap.end())
+			return false;
+		MsgDealFuncMap[MsgId] = fun;
+		return true;
+	}
+
+	virtual void MfVNetMsgDisposeFun(SOCKET sock, CSocketObj* Ser, CNetMsgHead* msg, std::thread::id& threadid)
+	{
+		auto Fun = MsgDealFuncMap.find(msg->MdCmd);
+		if (Fun == MsgDealFuncMap.end())
+			return;
+
+		Fun->second(Ser, msg + sizeof(CNetMsgHead), msg->MdLen - sizeof(CNetMsgHead));
+	}
 };
 
 int CClientLink::MfConnect(const char* ip, unsigned short port)
@@ -778,24 +797,6 @@ public:
 private:
 	void MfSendThread();											// 发送线程，循环调用send，收发线程根据是否可用标志确定行为
 	void MfRecvThread();											// 接收线程，循环调用recv，收发线程根据是否可用标志确定行为
-protected:
-	std::map<int, MsgFunType> MsgDealFuncMap;
-	bool RegMsg(int MsgId, MsgFunType fun)
-	{
-		if (MsgDealFuncMap.find(MsgId) != MsgDealFuncMap.end())
-			return false;
-		MsgDealFuncMap[MsgId] = fun;
-		return true;
-	}
-
-	virtual void MfVNetMsgDisposeFun(SOCKET sock, CSocketObj* Ser, CNetMsgHead* msg, std::thread::id& threadid)
-	{
-		auto Fun = MsgDealFuncMap.find(msg->MdCmd);
-		if (Fun == MsgDealFuncMap.end())
-			return;
-
-		Fun->second(Ser, msg + sizeof(CNetMsgHead), msg->MdLen);
-	}
 };
 
 CClientLinkManage::CClientLinkManage(int HeartSendInterval) :
@@ -987,7 +988,7 @@ void CClientLinkManage::MfRecvThread()
 					if (-1 == ((CNetMsgHead*)(it->second->MfGetRecvBufferP()))->MdCmd)	// 当该包的该字段为-1时，代表心跳
 						it->second->GetScoketObj()->MfHeartBeatUpDate();
 					else
-						MfVNetMsgDisposeFun(it->second->MfGetSocket(), it->second->GetScoketObj(), (CNetMsgHead*)it->second->MfGetRecvBufferP(), threadid);
+						it->second->MfVNetMsgDisposeFun(it->second->MfGetSocket(), it->second->GetScoketObj(), (CNetMsgHead*)it->second->MfGetRecvBufferP(), threadid);
 					it->second->MfPopFrontMsg();
 				}
 				++it;
@@ -1048,7 +1049,7 @@ protected:
 		if (Fun == MsgDealFuncMap.end())
 			return;
 
-		Fun->second(cli, msg + sizeof(CNetMsgHead), msg->MdLen);
+		Fun->second(cli, msg + sizeof(CNetMsgHead), msg->MdLen - sizeof(CNetMsgHead));
 	}
 };
 

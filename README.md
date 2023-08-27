@@ -12,11 +12,11 @@ linux需要链接pthread
 Server:
 
 
-    	CServiceEpoll S1(6, 1000, 5);                // 心跳间隔 最多连接多少个 开几个线程分摊
+	CServiceEpoll S1(6, 1000, 5);                // 心跳间隔 最多连接多少个 开几个线程分摊
     	S1.Mf_Epoll_Start(0, 4567);                  // ip 和 端口 默认本机ip
-    	或者
-    	CServiceNoBlock S2(6, 1000, 5);
-	S2.Mf_Epoll_Start(0, 4567);
+    	// or
+    	// CServiceNoBlock S2(6, 1000, 5);
+	// S2.Mf_Epoll_Start(0, 4567);
     	S1.RegMsg(200, [](CSocketObj* Cli, void* Data, int len)                // ser注册200号消息,发送100号回复客户端
         	{
             	// Deal

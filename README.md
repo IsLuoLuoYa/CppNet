@@ -7,7 +7,7 @@
 
 linux需要链接pthread
 
-详细说明参考：https://blog.csdn.net/qq_43082206/article/details/110383165，在原始代码经过一些修改，主体部分未修改
+详细说明参考：https://blog.csdn.net/qq_43082206/article/details/110383165 在原始代码经过一些修改，主体部分未修改
 
 Server:
 

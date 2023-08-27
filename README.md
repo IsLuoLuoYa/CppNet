@@ -11,7 +11,6 @@ linux需要链接pthread
 
 Server:
 
-
 	CServiceEpoll S1(6, 1000, 5);                // 心跳间隔 最多连接多少个 开几个线程分摊
 	S1.Mf_Epoll_Start(0, 4567);                  // ip 和 端口 默认本机ip
 	// or
@@ -25,8 +24,7 @@ Server:
 
 Client:
 
-
-    	CClientLinkManage Cli;
+	CClientLinkManage Cli;
 	Cli.MfStart();
 	std::string L1("t1");
 	std::string L2("t2");

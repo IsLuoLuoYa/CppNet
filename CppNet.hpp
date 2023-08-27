@@ -1043,7 +1043,7 @@ private:
 	void Mf_NoBlock_SendThread();									// 发线程
 	void Mf_NoBlock_ClientJoin(std::thread::id threadid, int SeqNumber);	// 客户端加入正式列表
 	void Mf_NoBlock_ClientLeave(std::thread::id threadid, int SeqNumber);	// 客户端移除正式列表
-protected:
+public:
 	std::map<int, MsgFunType> MsgDealFuncMap;
 	bool RegMsg(int MsgId, MsgFunType fun)
 	{

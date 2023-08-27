@@ -1024,6 +1024,7 @@ protected:
 	std::map<SOCKET, CSocketObj*>* MdClientLeaveList;			// 等待从正式列表中移除的缓冲列表
 	std::mutex* MdClientLeaveListMtx;		// 移除列表的锁
 	CThreadPool* MdThreadPool;
+	std::map<int, MsgFunType> MsgDealFuncMap;
 protected:			// 用来在服务启动时，等待其他所有线程启动后，再启动Accept线程
 	Barrier* MdBarrier1;
 protected:			// 这一组变量，用来在服务结束时，按accept recv dispose send的顺序来结束线程以保证不出错
@@ -1044,7 +1045,6 @@ private:
 	void Mf_NoBlock_ClientJoin(std::thread::id threadid, int SeqNumber);	// 客户端加入正式列表
 	void Mf_NoBlock_ClientLeave(std::thread::id threadid, int SeqNumber);	// 客户端移除正式列表
 public:
-	std::map<int, MsgFunType> MsgDealFuncMap;
 	bool RegMsg(int MsgId, MsgFunType fun)
 	{
 		if (MsgDealFuncMap.find(MsgId) != MsgDealFuncMap.end())

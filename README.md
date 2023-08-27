@@ -18,8 +18,8 @@ Server:
 	// S2.Mf_Epoll_Start(0, 4567);
 	S1.RegMsg(200, [](CSocketObj* Cli, void* Data, int len)                // ser注册200号消息,发送100号回复客户端
 		{
-  			// Deal
-     			Cli->MfSendMsg(100, (const char*)Data, len);
+			// Deal
+			Cli->MfSendMsg(100, (const char*)Data, len);
 		});
 
 Client:

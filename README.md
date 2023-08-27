@@ -1,9 +1,14 @@
 # CppNet
 一个只用包含头文件的cpp网络
+
 需要c++17
+
 跨平台
+
 linux需要链接pthread
+
 详细说明参考：https://blog.csdn.net/qq_43082206/article/details/110383165
+
 在原始代码经过一些修改，主体部分未修改
 
 Server:

@@ -708,7 +708,7 @@ public:
 		if (Fun == MsgDealFuncMap.end())
 			return;
 
-		Fun->second(Ser, msg + sizeof(CNetMsgHead), msg->MdLen - sizeof(CNetMsgHead));
+		Fun->second(Ser, ((char*)msg) + sizeof(CNetMsgHead), msg->MdLen - sizeof(CNetMsgHead));
 	}
 };
 
@@ -1059,7 +1059,7 @@ public:
 		if (Fun == MsgDealFuncMap.end())
 			return;
 
-		Fun->second(cli, msg + sizeof(CNetMsgHead), msg->MdLen - sizeof(CNetMsgHead));
+		Fun->second(cli, ((char*)msg) + sizeof(CNetMsgHead), msg->MdLen - sizeof(CNetMsgHead));
 	}
 };
 

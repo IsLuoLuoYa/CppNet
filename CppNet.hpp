@@ -64,10 +64,10 @@
 
 const int DEFAULTBUFFERLEN = 16384;
 
-class NewNetStart
+class CppNetStart
 {
 public:
-	NewNetStart()
+	CppNetStart()
 	{
 #ifdef WIN32
 		WORD sockVersion = MAKEWORD(2, 2);
@@ -95,7 +95,7 @@ public:
 	}
 };
 
-NewNetStart NewNetStartObj;
+CppNetStart Global_NewNetStartObj;
 
 class CSocketObj;
 typedef std::function<void(CSocketObj*, void*, int)> MsgFunType;

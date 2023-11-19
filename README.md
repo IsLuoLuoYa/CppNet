@@ -11,26 +11,46 @@ linux需要链接pthread
 
 Server:
 
-	CServiceEpoll S1(6, 1000, 5);                // 心跳间隔 最多连接多少个 开几个线程分摊
-	S1.Mf_Epoll_Start(0, 4567);                  // ip 和 端口 默认本机ip
-	// or
-	// CServiceNoBlock S2(6, 1000, 5);
-	// S2.Mf_Epoll_Start(0, 4567);
-	S1.RegMsg(200, [](CSocketObj* Cli, void* Data, int len)                // ser注册200号消息,发送100号回复客户端
-		{
-			Cli->MfSendMsg(100, (const char*)Data, len);
-		});
+    ServiceConf Conf;
+    Conf.Ip = "";
+    Conf.port = 4567;
+    CServiceEpoll S1(Conf);
+	S1.Mf_Epoll_Start();
+	//S1.Mf_NoBlock_Start(0, 4567);
+
+    S1.RegMsg(200, [](CSocketObj* Cli, void* Data, int len)
+        {
+            printf("%s\n", Data);
+            Cli->MfSendMsg(100, "bbbb", len);
+        });
 
 Client:
 
 	CClientLinkManage Cli;
 	Cli.MfStart();
+
 	std::string L1("t1");
 	std::string L2("t2");
-	Cli.MfCreateAddLink(L1, "192.168.56.101", 4567);       // 连接名字 ip 端口
-	Cli.MfCreateAddLink(L2, "192.168.56.101", 4567);
-	Cli.RegMsg(L1, 100, [](CSocketObj* Ser, void* Data, int len)             // cli收到100号消息处理 
+
+	ClientConf Conf1;
+	ClientConf Conf2;
+	Conf1.Linkname = "t1";
+	Conf1.Ip = "192.168.1.7";
+	Conf1.port = 4567;
+
+	Conf2.Linkname = "t2";
+	Conf2.Ip = "192.168.1.7";
+	Conf2.port = 4567;
+	Cli.MfCreateAddLink(Conf1);
+	Cli.MfCreateAddLink(Conf1);
+
+	Cli.RegMsg(L1, 100, [](CSocketObj* Ser, void* Data, int len)
 		{
-              // Deal
+			printf("%s\n", Data);
 		});
-	Cli.MfSendMsg(L1, 200, L1.c_str(), L1.size());                           // cli发送200号消息
+
+	while(1)
+	{
+		Cli.MfSendMsg(L1, 200, "aaaaa\0", 5);
+		Sleep(1000);
+	}

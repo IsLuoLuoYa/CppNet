@@ -62,7 +62,7 @@
 #include <list>
 #include <type_traits>
 
-const int DEFAULTBUFFERLEN = 16384;
+const int DEFAULTBUFFERLEN = 6666;
 
 class CppNetStart
 {

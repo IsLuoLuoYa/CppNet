@@ -54,6 +54,7 @@
 #include <thread>
 #include <shared_mutex>
 #include <map>
+#include <unordered_map>
 #include <vector>
 #include <queue>
 #include <condition_variable>
@@ -62,7 +63,7 @@
 #include <list>
 #include <type_traits>
 
-const int DEFAULTBUFFERLEN = 16384;
+const int DEFAULTBUFFERLEN = 65536;
 
 class CppNetStart
 {
@@ -668,13 +669,24 @@ CSocketObj::~CSocketObj()
 	MdHeartBeatTimer = nullptr;
 }
 
+struct ClientConf
+{
+	std::string			Linkname;
+	std::string			Ip;
+	unsigned short		port = 0;
+	int					SecondBufferSendLen = DEFAULTBUFFERLEN;// 第二缓冲区长度
+	int					SecondBufferRecvLen = DEFAULTBUFFERLEN;// 第二缓冲区长度
+	int					RawSocketSendLen = 0;		// socket本身缓冲区长度
+	int					RawSocketRecvLen = 0;		// socket本身缓冲区长度
+};
+
 class CClientLink
 {
 private:
-	std::string				MdLinkName;			// 服务名称，内容
+	ClientConf				MdConf;
 	CSocketObj* MdClientSock = 0;	// 客户连接对象
 	std::atomic<int>		MdIsConnect = 0;	// 表示是否连接成功	
-	std::map<int, MsgFunType> MsgDealFuncMap;
+	std::unordered_map<int, MsgFunType> MsgDealFuncMap;
 private:
 public:
 	CClientLink(std::string s) {};
@@ -683,7 +695,7 @@ public:
 	int MfClose();										/*关闭一个连接*/
 	inline CSocketObj* GetScoketObj()					/*返回socket对象*/ { return MdClientSock; }
 	SOCKET MfGetSocket()								/*返回描述符*/ { return MdClientSock->MfGetSock(); }
-	std::string MfGetSerivceNmae()						/*返回当前服务的名称*/ { return MdLinkName.c_str(); }
+	std::string MfGetSerivceNmae()						/*返回当前服务的名称*/ { return MdConf.Linkname.c_str(); }
 	int MfGetIsConnect()								/*当前服务是否连接*/ { return MdIsConnect.load(); }
 	int MfRecv()										/*供服务管理者调用接收数据*/ { return MdClientSock->MfRecv(); }
 	int MfSend()										/*供服务管理者调用发送数据*/ { return MdClientSock->MfSend(); }
@@ -748,7 +760,12 @@ int CClientLink::MfConnect(const char* ip, unsigned short port)
 			int flags = fcntl(CliSock, F_GETFL, 0);
 			fcntl(CliSock, F_SETFL, flags | O_NONBLOCK);
 #endif
-			MdClientSock = new CSocketObj(CliSock);
+			if (MdConf.RawSocketRecvLen != 0)
+				setsockopt(CliSock, SOL_SOCKET, SO_RCVBUF, (const char*)&(MdConf.RawSocketRecvLen), sizeof(int));
+			if (MdConf.RawSocketSendLen != 0)
+				setsockopt(CliSock, SOL_SOCKET, SO_SNDBUF, (const char*)&(MdConf.RawSocketSendLen), sizeof(int));
+
+			MdClientSock = new CSocketObj(CliSock, MdConf.SecondBufferSendLen, MdConf.SecondBufferRecvLen);
 			MdIsConnect = 1;
 			break;
 		}
@@ -773,7 +790,7 @@ int CClientLink::MfClose()
 class CClientLinkManage
 {
 private:
-	std::map<std::string, CClientLink*>		MdClientLinkList;
+	std::unordered_map<std::string, CClientLink*>		MdClientLinkList;
 	std::shared_mutex						MdClientLinkListMtx;
 	std::atomic<int>						MdIsStart = 0;			// 收发线程是否启动，不启动时，不能添加连接，因为如果放在构造中启动线程是危险的
 	Barrier* MdBarrier;				// 用于创建连接前的收发线程启动
@@ -787,7 +804,7 @@ public:
 	CClientLinkManage(int HeartSendInterval = 3);
 	~CClientLinkManage();
 	void MfStart();													// 启动收发线程
-	int MfCreateAddLink(std::string Linkname, const char* ip, unsigned short port);		// 如果需要建立新的连接，就new一个ClientLink，同时记录连接的目标，然后加入列表是，设置client可用
+	int MfCreateAddLink(ClientConf Conf);		// 如果需要建立新的连接，就new一个ClientLink，同时记录连接的目标，然后加入列表是，设置client可用
 	void MfCloseLink(std::string Linkname);							// 关闭某个连接
 	bool MfSendMsg(std::string name, int MsgId, const char* data, int len);
 	const char* MfGetRecvBufferP(std::string name);					// 返回接收缓冲区的指针，可以直接读这里的数据
@@ -847,7 +864,7 @@ void CClientLinkManage::MfStart()
 	MdIsStart = 1;
 }
 
-int CClientLinkManage::MfCreateAddLink(std::string Linkname, const char* ip, unsigned short port)
+int CClientLinkManage::MfCreateAddLink(ClientConf Conf)
 {
 	if (!MdIsStart.load())
 	{
@@ -856,18 +873,18 @@ int CClientLinkManage::MfCreateAddLink(std::string Linkname, const char* ip, uns
 
 	{
 		std::shared_lock<std::shared_mutex> lk(MdClientLinkListMtx);
-		if (MdClientLinkList.find(Linkname) != MdClientLinkList.end())
+		if (MdClientLinkList.find(Conf.Linkname) != MdClientLinkList.end())
 		{
 			return SOCKET_ERROR;
 		}
 	}
 
-	CClientLink* temp = new	CClientLink(Linkname);
-	int ret = temp->MfConnect(ip, port);
+	CClientLink* temp = new	CClientLink(Conf.Linkname);
+	int ret = temp->MfConnect(Conf.Ip.c_str(), Conf.port);
 	if (SOCKET_ERROR != ret)	// 成功连接后就加入正式队列
 	{
 		std::unique_lock<std::shared_mutex> lk(MdClientLinkListMtx);
-		MdClientLinkList.insert(std::pair<std::string, CClientLink*>(Linkname, temp));
+		MdClientLinkList.insert(std::pair<std::string, CClientLink*>(Conf.Linkname, temp));
 		return ret;
 	}
 	delete temp;
@@ -1008,23 +1025,34 @@ bool CClientLinkManage::RegMsg(std::string LinkName, int MsgId, MsgFunType fun)
 	return it->second->RegMsg(MsgId, fun);
 }
 
+struct ServiceConf
+{
+	std::string			Ip;
+	unsigned short		port = 0;
+	int					MdServiceMaxPeoples = 10000;// 该服务的上限人数
+	int					MdDisposeThreadNums = 1;	// 消息处理线程数
+	int					MdHeartBeatTime = 300;		// 心跳时限，该时限内未收到消息默认断开，单位秒	
+	int					SecondBufferSendLen = DEFAULTBUFFERLEN;// 第二缓冲区长度
+	int					SecondBufferRecvLen = DEFAULTBUFFERLEN;// 第二缓冲区长度
+	int					RawSocketSendLen = 0;		// socket本身缓冲区长度
+	int					RawSocketRecvLen = 0;		// socket本身缓冲区长度
+};
+
 class CServiceNoBlock
 {
 protected:
 	SOCKET								MdListenSock;				// 监听套接字
-	int									MdServiceMaxPeoples;		// 该服务的上限人数
-	int									MdDisposeThreadNums;		// 消息处理线程数
-	int									MdHeartBeatTime;			// 心跳时限，该时限内未收到消息默认断开，单位秒
+	ServiceConf							MdConf;						// 各种参数
 	CTimer* MdHeartBeatTestInterval;	// 心跳间隔检测用到的计时器
 	CObjectPool<CSocketObj>* Md_CSocketObj_POOL;			// 客户端对象的对象池
-	std::map<SOCKET, CSocketObj*>* MdPClientJoinList;			// 非正式客户端缓冲列表，等待加入正式列表，同正式客户列表一样，一个线程对应一个加入列表
+	std::unordered_map<SOCKET, CSocketObj*>* MdPClientJoinList;			// 非正式客户端缓冲列表，等待加入正式列表，同正式客户列表一样，一个线程对应一个加入列表
 	std::mutex* MdPClientJoinListMtx;		// 非正式客户端列表的锁
-	std::map<SOCKET, CSocketObj*>* MdPClientFormalList;		// 正式的客户端列表，一个线程对应一个map[],存储当前线程的服务对象,map[threadid]找到对应map，map[threadid][socket]找出socket对应的数据
+	std::unordered_map<SOCKET, CSocketObj*>* MdPClientFormalList;		// 正式的客户端列表，一个线程对应一个map[],存储当前线程的服务对象,map[threadid]找到对应map，map[threadid][socket]找出socket对应的数据
 	std::shared_mutex* MdPClientFormalListMtx;		// 为一MdPEachDisoposeThreadOfServiceObj[]添加sock时，应MdEachThreadOfMtx[].lock
-	std::map<SOCKET, CSocketObj*>* MdClientLeaveList;			// 等待从正式列表中移除的缓冲列表
+	std::unordered_map<SOCKET, CSocketObj*>* MdClientLeaveList;			// 等待从正式列表中移除的缓冲列表
 	std::mutex* MdClientLeaveListMtx;		// 移除列表的锁
 	CThreadPool* MdThreadPool;
-	std::map<int, MsgFunType> MsgDealFuncMap;
+	std::unordered_map<int, MsgFunType>			MsgDealFuncMap;
 protected:			// 用来在服务启动时，等待其他所有线程启动后，再启动Accept线程
 	Barrier* MdBarrier1;
 protected:			// 这一组变量，用来在服务结束时，按accept recv dispose send的顺序来结束线程以保证不出错
@@ -1032,11 +1060,11 @@ protected:			// 这一组变量，用来在服务结束时，按accept recv disp
 	Barrier* MdBarrier3;		// recv线程			和	所有dispos线程		的同步变量
 	Barrier* MdBarrier4;		// send线程			和	dispose线程			的同步和前面不同，用屏障的概念等待多个线程来继续执行
 public:
-	CServiceNoBlock(int HeartBeatTime = 300, int ServiceMaxPeoples = 1000, int DisposeThreadNums = 1);
+	CServiceNoBlock(ServiceConf Conf);
 	virtual ~CServiceNoBlock();
-	void Mf_NoBlock_Start(const char* ip, unsigned short port);		// 启动收发处理线程的非阻塞版本
+	void Mf_NoBlock_Start();		// 启动收发处理线程的非阻塞版本
 protected:
-	bool Mf_Init_ListenSock(const char* ip, unsigned short port);	// 初始化套接字
+	bool Mf_Init_ListenSock();		// 初始化套接字
 private:
 	void Mf_NoBlock_AcceptThread();									// 等待客户端连接的线程
 	void Mf_NoBlock_RecvThread();									// 收线程
@@ -1077,9 +1105,9 @@ private:
 	std::vector<epoll_event*>	MdEpoll_In_Event;	// 接收线程用到的结构集合
 	int							MdThreadAvgPeoples;	// 每个线程的平均人数
 public:
-	CServiceEpoll(int HeartBeatTime = 300, int ServiceMaxPeoples = 1000, int DisposeThreadNums = 1);
+	CServiceEpoll(ServiceConf Conf);
 	virtual ~CServiceEpoll();
-	bool Mf_Epoll_Start(const char* ip, unsigned short port);
+	bool Mf_Epoll_Start();
 private:
 	void Mf_Epoll_AcceptThread();							// 等待客户端连接的线程
 	void Mf_Epoll_RecvAndDisposeThread(int SeqNumber);		// 处理线程
@@ -1090,10 +1118,7 @@ private:
 
 #endif // !WIN32
 
-CServiceNoBlock::CServiceNoBlock(int HeartBeatTime, int ServiceMaxPeoples, int DisposeThreadNums) :
-	MdServiceMaxPeoples(ServiceMaxPeoples),
-	MdDisposeThreadNums(DisposeThreadNums),
-	MdHeartBeatTime(HeartBeatTime),
+CServiceNoBlock::CServiceNoBlock(ServiceConf Conf) :
 	MdHeartBeatTestInterval(nullptr),
 	Md_CSocketObj_POOL(nullptr),
 	MdPClientJoinList(nullptr),
@@ -1108,14 +1133,15 @@ CServiceNoBlock::CServiceNoBlock(int HeartBeatTime, int ServiceMaxPeoples, int D
 	MdBarrier4(nullptr),
 	MdThreadPool(nullptr)
 {
+	MdConf = Conf;
 	MdHeartBeatTestInterval = new CTimer;
-	Md_CSocketObj_POOL = new CObjectPool<CSocketObj>(MdServiceMaxPeoples);
-	MdPClientFormalList = new std::map<SOCKET, CSocketObj*>[MdDisposeThreadNums];
-	MdPClientFormalListMtx = new std::shared_mutex[MdDisposeThreadNums];
-	MdPClientJoinList = new std::map<SOCKET, CSocketObj*>[MdDisposeThreadNums];
-	MdPClientJoinListMtx = new std::mutex[MdDisposeThreadNums];
-	MdClientLeaveList = new std::map<SOCKET, CSocketObj*>[MdDisposeThreadNums];
-	MdClientLeaveListMtx = new std::mutex[MdDisposeThreadNums];
+	Md_CSocketObj_POOL = new CObjectPool<CSocketObj>(MdConf.MdServiceMaxPeoples);
+	MdPClientFormalList = new std::unordered_map<SOCKET, CSocketObj*>[MdConf.MdDisposeThreadNums];
+	MdPClientFormalListMtx = new std::shared_mutex[MdConf.MdDisposeThreadNums];
+	MdPClientJoinList = new std::unordered_map<SOCKET, CSocketObj*>[MdConf.MdDisposeThreadNums];
+	MdPClientJoinListMtx = new std::mutex[MdConf.MdDisposeThreadNums];
+	MdClientLeaveList = new std::unordered_map<SOCKET, CSocketObj*>[MdConf.MdDisposeThreadNums];
+	MdClientLeaveListMtx = new std::mutex[MdConf.MdDisposeThreadNums];
 	MdBarrier1 = new Barrier;
 	MdBarrier2 = new Barrier;
 	MdBarrier3 = new Barrier;
@@ -1178,44 +1204,46 @@ CServiceNoBlock::~CServiceNoBlock()
 	MdBarrier4 = nullptr;
 }
 
-void CServiceNoBlock::Mf_NoBlock_Start(const char* ip, unsigned short port)
+void CServiceNoBlock::Mf_NoBlock_Start()
 {
-	Mf_Init_ListenSock(ip, port);
+	Mf_Init_ListenSock();
 
 	// 处理线程同步
-	MdBarrier1->MfInit(MdDisposeThreadNums + 2 + 1);	// 处理线程数量 + send和recv线程 + recv线程本身
-	MdBarrier2->MfInit(2);								// accept + recv两条线程
-	MdBarrier3->MfInit(MdDisposeThreadNums + 1);		// 处理线程数量 + recv线程
-	MdBarrier4->MfInit(MdDisposeThreadNums + 1);		// 处理线程数量 + send线程
+	MdBarrier1->MfInit(MdConf.MdDisposeThreadNums + 2 + 1);	// 处理线程数量 + send和recv线程 + recv线程本身
+	MdBarrier2->MfInit(2);									// accept + recv两条线程
+	MdBarrier3->MfInit(MdConf.MdDisposeThreadNums + 1);		// 处理线程数量 + recv线程
+	MdBarrier4->MfInit(MdConf.MdDisposeThreadNums + 1);		// 处理线程数量 + send线程
 
 	// 启动各个线程
-	MdThreadPool->MfStart(1 + MdDisposeThreadNums + 1 + 1);
+	MdThreadPool->MfStart(1 + MdConf.MdDisposeThreadNums + 1 + 1);
 	MdThreadPool->MfEnqueue(std::bind(&CServiceNoBlock::Mf_NoBlock_SendThread, this));			// 启动发送线程
-	for (int i = 0; i < MdDisposeThreadNums; ++i)
+	for (int i = 0; i < MdConf.MdDisposeThreadNums; ++i)
 		MdThreadPool->MfEnqueue(std::bind(&CServiceNoBlock::Mf_NoBlock_DisposeThread, this, i));	// 启动多条处理线程线程
 	MdThreadPool->MfEnqueue(std::bind(&CServiceNoBlock::Mf_NoBlock_RecvThread, this));			// 启动接收线程
 	MdThreadPool->MfEnqueue(std::bind(&CServiceNoBlock::Mf_NoBlock_AcceptThread, this));			// 启动等待连接线程
 }
 
-bool CServiceNoBlock::Mf_Init_ListenSock(const char* ip, unsigned short port)
+bool CServiceNoBlock::Mf_Init_ListenSock()
 {
 	std::thread::id threadid = std::this_thread::get_id();
 
 	// 初始化监听套接字
 	sockaddr_in addr{};
 	addr.sin_family = AF_INET;
-	addr.sin_port = htons(port);
+	addr.sin_port = htons(MdConf.port);
 #ifndef WIN32
-	if (ip)		addr.sin_addr.s_addr = inet_addr(ip);
-	else		addr.sin_addr.s_addr = INADDR_ANY;
+	if (!MdConf.Ip.empty())		addr.sin_addr.s_addr = inet_addr(MdConf.Ip.c_str());
+	else						addr.sin_addr.s_addr = INADDR_ANY;
 #else
-	if (ip)		addr.sin_addr.S_un.S_addr = inet_addr(ip);
-	else		addr.sin_addr.S_un.S_addr = INADDR_ANY;
+	if (!MdConf.Ip.empty())		addr.sin_addr.S_un.S_addr = inet_addr(MdConf.Ip.c_str());
+	else						addr.sin_addr.S_un.S_addr = INADDR_ANY;
 #endif
 
 	MdListenSock = socket(AF_INET, SOCK_STREAM, 0);
 	if (SOCKET_ERROR == MdListenSock)
 		return false;
+	int reuse = 1;
+	setsockopt(MdListenSock, SOL_SOCKET, SO_REUSEADDR, (const char*)&reuse, sizeof(int));
 	if (SOCKET_ERROR == bind(MdListenSock, (sockaddr*)&addr, sizeof(addr)))
 		return false;
 	if (SOCKET_ERROR == listen(MdListenSock, 100))
@@ -1258,9 +1286,9 @@ void CServiceNoBlock::Mf_NoBlock_AcceptThread()
 	while (!MdThreadPool->MfIsStop())
 	{
 		currPeoples = 0;
-		for (int i = 0; i < MdDisposeThreadNums; ++i)	// 计算当前已连接人数
+		for (int i = 0; i < MdConf.MdDisposeThreadNums; ++i)	// 计算当前已连接人数
 			currPeoples += (int)MdPClientFormalList[i].size();
-		if (currPeoples > MdServiceMaxPeoples)	// 大于上限服务人数，就不accpet，等待然后开始下一轮循环
+		if (currPeoples > MdConf.MdServiceMaxPeoples)	// 大于上限服务人数，就不accpet，等待然后开始下一轮循环
 		{
 			std::this_thread::sleep_for(std::chrono::seconds(1));
 			continue;
@@ -1289,8 +1317,13 @@ void CServiceNoBlock::Mf_NoBlock_AcceptThread()
 			unsigned long ul = 1;
 			ioctlsocket(sock, FIONBIO, &ul);
 #endif
+			if (MdConf.RawSocketRecvLen != 0)
+				setsockopt(sock, SOL_SOCKET, SO_RCVBUF, (const char*)&(MdConf.RawSocketRecvLen), sizeof(int));
+			if (MdConf.RawSocketSendLen != 0)
+				setsockopt(sock, SOL_SOCKET, SO_SNDBUF, (const char*)&(MdConf.RawSocketSendLen), sizeof(int));
+
 			minPeoples = INT32_MAX;
-			for (int i = 0; i < MdDisposeThreadNums; ++i)	// 找出人数最少的
+			for (int i = 0; i < MdConf.MdDisposeThreadNums; ++i)	// 找出人数最少的
 			{
 				if (minPeoples > (int)MdPClientFormalList[i].size())
 				{
@@ -1298,7 +1331,7 @@ void CServiceNoBlock::Mf_NoBlock_AcceptThread()
 					minId = i;
 				}
 			}
-			CSocketObj* TempSocketObj = Md_CSocketObj_POOL->MfApplyObject(sock);
+			CSocketObj* TempSocketObj = Md_CSocketObj_POOL->MfApplyObject(sock, MdConf.SecondBufferSendLen, MdConf.SecondBufferRecvLen);
 			TempSocketObj->MfSetPeerAddr(&addr);
 			TempSocketObj->MfSetThreadIndex(minId);
 			std::lock_guard<std::mutex> lk(MdPClientJoinListMtx[minId]);								// 对应的线程map上锁
@@ -1327,7 +1360,7 @@ void CServiceNoBlock::Mf_NoBlock_RecvThread()
 	// 主循环
 	while (!MdThreadPool->MfIsStop())
 	{
-		for (int i = 0; i < MdDisposeThreadNums; ++i)
+		for (int i = 0; i < MdConf.MdDisposeThreadNums; ++i)
 		{
 			std::shared_lock<std::shared_mutex> ReadLock(MdPClientFormalListMtx[i]);				// 对应的线程map上锁，放在这里上锁的原因是为了防止插入行为导致迭代器失效
 			for (auto it = MdPClientFormalList[i].begin(); it != MdPClientFormalList[i].end(); ++it)
@@ -1350,7 +1383,7 @@ void CServiceNoBlock::Mf_NoBlock_RecvThread()
 	MdBarrier2->MfWait();
 
 	// 然后对所有套接字最后一次接收
-	for (int i = 0; i < MdDisposeThreadNums; ++i)
+	for (int i = 0; i < MdConf.MdDisposeThreadNums; ++i)
 	{
 		std::shared_lock<std::shared_mutex> ReadLock(MdPClientFormalListMtx[i]);
 		for (auto it = MdPClientFormalList[i].begin(); it != MdPClientFormalList[i].end(); ++it)
@@ -1424,7 +1457,7 @@ void CServiceNoBlock::Mf_NoBlock_SendThread()
 	// 主循环
 	while (!MdThreadPool->MfIsStop())
 	{
-		for (int i = 0; i < MdDisposeThreadNums; ++i)
+		for (int i = 0; i < MdConf.MdDisposeThreadNums; ++i)
 		{
 			std::shared_lock<std::shared_mutex> ReadLock(MdPClientFormalListMtx[i]);			// 对应的线程map上锁，放在这里上锁的原因是为了防止插入行为导致迭代器失效
 			for (auto it = MdPClientFormalList[i].begin(); it != MdPClientFormalList[i].end(); ++it)
@@ -1447,7 +1480,7 @@ void CServiceNoBlock::Mf_NoBlock_SendThread()
 	MdBarrier4->MfWait();
 
 	// 发送所有数据
-	for (int i = 0; i < MdDisposeThreadNums; ++i)
+	for (int i = 0; i < MdConf.MdDisposeThreadNums; ++i)
 	{
 		std::shared_lock<std::shared_mutex> ReadLock(MdPClientFormalListMtx[i]);
 		for (auto it = MdPClientFormalList[i].begin(); it != MdPClientFormalList[i].end(); ++it)
@@ -1455,7 +1488,7 @@ void CServiceNoBlock::Mf_NoBlock_SendThread()
 	}
 
 	// 关闭所有套接字
-	for (int i = 0; i < MdDisposeThreadNums; ++i)
+	for (int i = 0; i < MdConf.MdDisposeThreadNums; ++i)
 	{
 		for (auto it = MdPClientFormalList[i].begin(); it != MdPClientFormalList[i].end(); ++it)
 		{
@@ -1482,7 +1515,7 @@ void CServiceNoBlock::Mf_NoBlock_ClientJoin(std::thread::id threadid, int SeqNum
 
 void CServiceNoBlock::Mf_NoBlock_ClientLeave(std::thread::id threadid, int SeqNumber)
 {
-	static const int HeartIntervalTime = MdHeartBeatTime / 3;		// 心跳检测间隔时限
+	static const int HeartIntervalTime = MdConf.MdHeartBeatTime / 3;		// 心跳检测间隔时限
 
 	// 本函数中的两个也都使用尝试锁，因为这里不是重要的地方，也不是需要高效执行的地方
 	std::unique_lock<std::mutex> lk(MdClientLeaveListMtx[SeqNumber], std::defer_lock);
@@ -1495,7 +1528,7 @@ void CServiceNoBlock::Mf_NoBlock_ClientLeave(std::thread::id threadid, int SeqNu
 			// 遍历当前列表的客户端心跳计时器，超时就放入待离开列表
 			for (auto it : MdPClientFormalList[SeqNumber])
 			{
-				if (it.second->MfHeartIsTimeOut(MdHeartBeatTime))
+				if (it.second->MfHeartIsTimeOut(MdConf.MdHeartBeatTime))
 				{
 					MdClientLeaveList[SeqNumber].insert(std::pair<SOCKET, CSocketObj*>(it.first, it.second));
 				}
@@ -1523,11 +1556,11 @@ void CServiceNoBlock::Mf_NoBlock_ClientLeave(std::thread::id threadid, int SeqNu
 // --------------------------------------------------------分割线--------------------------------------------------------
 
 #ifndef WIN32
-CServiceEpoll::CServiceEpoll(int HeartBeatTime, int ServiceMaxPeoples, int DisposeThreadNums) :
-	CServiceNoBlock(HeartBeatTime, ServiceMaxPeoples, DisposeThreadNums)
+CServiceEpoll::CServiceEpoll(ServiceConf Conf) :
+	CServiceNoBlock(Conf)
 {
-	MdThreadAvgPeoples = (MdServiceMaxPeoples / MdDisposeThreadNums) + 100;
-	for (int i = 0; i < MdDisposeThreadNums; ++i)
+	MdThreadAvgPeoples = (MdConf.MdServiceMaxPeoples / MdConf.MdDisposeThreadNums) + 100;
+	for (int i = 0; i < MdConf.MdDisposeThreadNums; ++i)
 	{
 		MdEpoll_In_Event.push_back(new epoll_event[MdThreadAvgPeoples]);
 	}
@@ -1539,14 +1572,14 @@ CServiceEpoll::~CServiceEpoll()
 		delete[] it;
 }
 
-bool CServiceEpoll::Mf_Epoll_Start(const char* ip, unsigned short port)
+bool CServiceEpoll::Mf_Epoll_Start()
 {
-	for (int i = 0; i < MdDisposeThreadNums; ++i)		// 为各个处理线程建立epoll的描述符
+	for (int i = 0; i < MdConf.MdDisposeThreadNums; ++i)		// 为各个处理线程建立epoll的描述符
 	{
 		MdEpoll_In_Fd.push_back(epoll_create(MdThreadAvgPeoples));
 	}
 
-	for (int i = 0; i < MdDisposeThreadNums; ++i)		// 检查各个描述符是否出错
+	for (int i = 0; i < MdConf.MdDisposeThreadNums; ++i)		// 检查各个描述符是否出错
 	{
 		if (-1 == MdEpoll_In_Fd[i])
 		{
@@ -1554,18 +1587,18 @@ bool CServiceEpoll::Mf_Epoll_Start(const char* ip, unsigned short port)
 		}
 	}
 
-	if (!Mf_Init_ListenSock(ip, port))
+	if (!Mf_Init_ListenSock())
 		return false;
 
 	// 处理线程同步
-	MdBarrier1->MfInit(MdDisposeThreadNums + 1 + 1);	// 处理线程数量 + send和recv线程 + recv线程本身
+	MdBarrier1->MfInit(MdConf.MdDisposeThreadNums + 1 + 1);	// 处理线程数量 + send和recv线程 + recv线程本身
 	MdBarrier2->MfInit(2);								// 在epoll中未被使用
-	MdBarrier3->MfInit(MdDisposeThreadNums + 1);		// accept + 处理线程数量
-	MdBarrier4->MfInit(MdDisposeThreadNums + 1);		// 处理线程数量 + send线程
+	MdBarrier3->MfInit(MdConf.MdDisposeThreadNums + 1);		// accept + 处理线程数量
+	MdBarrier4->MfInit(MdConf.MdDisposeThreadNums + 1);		// 处理线程数量 + send线程
 
-	MdThreadPool->MfStart(1 + MdDisposeThreadNums + 1);
+	MdThreadPool->MfStart(1 + MdConf.MdDisposeThreadNums + 1);
 	MdThreadPool->MfEnqueue(std::bind(&CServiceEpoll::Mf_Epoll_SendThread, this));					// 启动发送线程
-	for (int i = 0; i < MdDisposeThreadNums; ++i)
+	for (int i = 0; i < MdConf.MdDisposeThreadNums; ++i)
 		MdThreadPool->MfEnqueue(std::bind(&CServiceEpoll::Mf_Epoll_RecvAndDisposeThread, this, i));	// 启动多条处理线程,！！！！收线程和处理线程合并了！！！！
 	MdThreadPool->MfEnqueue(std::bind(&CServiceEpoll::Mf_Epoll_AcceptThread, this));		// 启动等待连接线程			
 	return true;
@@ -1591,9 +1624,9 @@ void CServiceEpoll::Mf_Epoll_AcceptThread()
 	while (!MdThreadPool->MfIsStop())
 	{
 		currPeoples = 0;
-		for (int i = 0; i < MdDisposeThreadNums; ++i)	// 计算当前已连接人数
+		for (int i = 0; i < MdConf.MdDisposeThreadNums; ++i)	// 计算当前已连接人数
 			currPeoples += (int)MdPClientFormalList[i].size();
-		if (currPeoples > MdServiceMaxPeoples)	// 大于上限服务人数，就不accpet，等待然后开始下一轮循环
+		if (currPeoples > MdConf.MdServiceMaxPeoples)	// 大于上限服务人数，就不accpet，等待然后开始下一轮循环
 		{
 			std::this_thread::sleep_for(std::chrono::seconds(1));
 			continue;
@@ -1617,8 +1650,14 @@ void CServiceEpoll::Mf_Epoll_AcceptThread()
 		{
 			int flags = fcntl(sock, F_GETFL, 0);					// 对收到套接字设置非阻塞
 			fcntl(sock, F_SETFL, flags | O_NONBLOCK);
+
+			if (MdConf.RawSocketRecvLen != 0)
+				setsockopt(sock, SOL_SOCKET, SO_RCVBUF, (const char*)&(MdConf.RawSocketRecvLen), sizeof(int));
+			if (MdConf.RawSocketSendLen != 0)
+				setsockopt(sock, SOL_SOCKET, SO_SNDBUF, (const char*)&(MdConf.RawSocketSendLen), sizeof(int));
+
 			minPeoples = INT32_MAX;
-			for (int i = 0; i < MdDisposeThreadNums; ++i)			// 找出人数最少的
+			for (int i = 0; i < MdConf.MdDisposeThreadNums; ++i)			// 找出人数最少的
 			{
 				if (minPeoples > (int)MdPClientFormalList[i].size())
 				{
@@ -1626,7 +1665,7 @@ void CServiceEpoll::Mf_Epoll_AcceptThread()
 					minId = i;
 				}
 			}
-			CSocketObj* TempSocketObj = Md_CSocketObj_POOL->MfApplyObject(sock);
+			CSocketObj* TempSocketObj = Md_CSocketObj_POOL->MfApplyObject(sock, MdConf.SecondBufferSendLen, MdConf.SecondBufferRecvLen);
 			TempSocketObj->MfSetPeerAddr(&addr);
 			TempSocketObj->MfSetThreadIndex(minId);
 			std::lock_guard<std::mutex> lk(MdPClientJoinListMtx[minId]);								// 对应的线程map上锁
@@ -1736,7 +1775,7 @@ void CServiceEpoll::Mf_Epoll_SendThread()
 	// 主循环
 	while (!MdThreadPool->MfIsStop())
 	{
-		for (int i = 0; i < MdDisposeThreadNums; ++i)
+		for (int i = 0; i < MdConf.MdDisposeThreadNums; ++i)
 		{
 			std::shared_lock<std::shared_mutex> ReadLock(MdPClientFormalListMtx[i]);				// 对应的线程map上锁，放在这里上锁的原因是为了防止插入行为导致迭代器失效
 
@@ -1760,7 +1799,7 @@ void CServiceEpoll::Mf_Epoll_SendThread()
 	MdBarrier4->MfWait();
 
 	// 发送所有数据
-	for (int i = 0; i < MdDisposeThreadNums; ++i)
+	for (int i = 0; i < MdConf.MdDisposeThreadNums; ++i)
 	{
 		std::shared_lock<std::shared_mutex> ReadLock(MdPClientFormalListMtx[i]);
 		for (auto it : MdPClientFormalList[i])
@@ -1769,7 +1808,7 @@ void CServiceEpoll::Mf_Epoll_SendThread()
 		}
 	}
 
-	for (int i = 0; i < MdDisposeThreadNums; ++i)
+	for (int i = 0; i < MdConf.MdDisposeThreadNums; ++i)
 	{
 		for (auto it = MdPClientFormalList[i].begin(); it != MdPClientFormalList[i].end(); ++it)
 		{
@@ -1799,7 +1838,7 @@ void CServiceEpoll::Mf_Epoll_ClientJoin(std::thread::id threadid, int SeqNumber)
 
 void CServiceEpoll::Mf_Epoll_ClientLeave(std::thread::id threadid, int SeqNumber)
 {
-	static const int HeartIntervalTime = MdHeartBeatTime / 3;		// 心跳检测间隔时限
+	static const int HeartIntervalTime = MdConf.MdHeartBeatTime / 3;		// 心跳检测间隔时限
 
 	// 本函数中的两个也都使用尝试锁，因为这里不是重要的地方，也不是需要高效执行的地方
 	std::unique_lock<std::mutex> lk(MdClientLeaveListMtx[SeqNumber], std::defer_lock);
@@ -1812,7 +1851,7 @@ void CServiceEpoll::Mf_Epoll_ClientLeave(std::thread::id threadid, int SeqNumber
 			// 遍历当前列表的客户端心跳计时器，超时就放入待离开列表
 			for (auto it : MdPClientFormalList[SeqNumber])
 			{
-				if (it.second->MfHeartIsTimeOut(MdHeartBeatTime))
+				if (it.second->MfHeartIsTimeOut(MdConf.MdHeartBeatTime))
 				{
 					MdClientLeaveList[SeqNumber].insert(std::pair<SOCKET, CSocketObj*>(it.first, it.second));
 				}

@@ -12,8 +12,8 @@ Server:
     ServiceConf Conf;
     Conf.Ip = "";
     Conf.port = 4567;
-    CServiceEpoll S1(Conf);
-	S1.Mf_Epoll_Start();
+    CServiceEpoll S1();
+	S1.Mf_Epoll_Start(Conf);
 	//S1.Mf_NoBlock_Start(0, 4567);
 
     S1.RegMsg(200, [](CSocketObj* Cli, void* Data, int len)

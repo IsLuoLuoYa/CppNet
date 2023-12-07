@@ -1027,6 +1027,7 @@ bool CClientLinkManage::RegMsg(std::string LinkName, int MsgId, MsgFunType fun)
 
 struct ServiceConf
 {
+	std::string			Fun;
 	std::string			Ip;
 	unsigned short		port = 0;
 	int					MdServiceMaxPeoples = 10000;// 该服务的上限人数

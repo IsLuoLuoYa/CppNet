@@ -597,9 +597,9 @@ protected:			// 这一组变量，用来在服务结束时，按accept recv disp
 	Barrier* MdBarrier3;		// recv线程			和	所有dispos线程		的同步变量
 	Barrier* MdBarrier4;		// send线程			和	dispose线程			的同步和前面不同，用屏障的概念等待多个线程来继续执行
 public:
-	CServiceNoBlock(ServiceConf Conf);
+	CServiceNoBlock();
 	virtual ~CServiceNoBlock();
-	bool Mf_NoBlock_Start();		// 启动收发处理线程的非阻塞版本
+	bool Mf_NoBlock_Start(ServiceConf Conf);		// 启动收发处理线程的非阻塞版本
 	bool Mf_NoBlock_Stop();
 protected:
 	bool Mf_Init_ListenSock();		// 初始化套接字
@@ -638,9 +638,9 @@ private:
 	std::vector<epoll_event*>	MdEpoll_In_Event;	// 接收线程用到的结构集合
 	int							MdThreadAvgPeoples;	// 每个线程的平均人数
 public:
-	CServiceEpoll(ServiceConf Conf);
+	CServiceEpoll();
 	virtual ~CServiceEpoll();
-	bool Mf_Epoll_Start();
+	bool Mf_Epoll_Start(ServiceConf Conf);
 	void Mf_Epoll_Stop();
 private:
 	void Mf_Epoll_AcceptThread();							// 等待客户端连接的线程

@@ -460,7 +460,7 @@ bool CClientLinkManage::RegMsg(std::string LinkName, int MsgId, MsgFunType fun)
 	return it->second->RegMsg(MsgId, fun);
 }
 
-CServiceNoBlock::CServiceNoBlock(ServiceConf Conf) :
+CServiceNoBlock::CServiceNoBlock() :
 	MdHeartBeatTestInterval(nullptr),
 	Md_CSocketObj_POOL(nullptr),
 	MdPClientJoinList(nullptr),
@@ -475,7 +475,6 @@ CServiceNoBlock::CServiceNoBlock(ServiceConf Conf) :
 	MdBarrier4(nullptr),
 	MdThreadPool(nullptr)
 {
-	MdConf = Conf;
 	MdHeartBeatTestInterval = new CTimer;
 	Md_CSocketObj_POOL = new CObjectPool<CSocketObj>(MdConf.MdServiceMaxPeoples);
 	MdPClientFormalList = new std::unordered_map<SOCKET, CSocketObj*>[MdConf.MdDisposeThreadNums];
@@ -546,8 +545,9 @@ CServiceNoBlock::~CServiceNoBlock()
 	MdBarrier4 = nullptr;
 }
 
-bool CServiceNoBlock::Mf_NoBlock_Start()
+bool CServiceNoBlock::Mf_NoBlock_Start(ServiceConf Conf)
 {
+	MdConf = Conf;
 	if (!Mf_Init_ListenSock())
 		return false;
 
@@ -901,8 +901,8 @@ void CServiceNoBlock::Mf_NoBlock_ClientLeave(std::thread::id threadid, int SeqNu
 }
 
 #ifndef WIN32
-CServiceEpoll::CServiceEpoll(ServiceConf Conf) :
-	CServiceNoBlock(Conf)
+CServiceEpoll::CServiceEpoll() :
+	CServiceNoBlock()
 {
 	MdThreadAvgPeoples = (MdConf.MdServiceMaxPeoples / MdConf.MdDisposeThreadNums) + 100;
 	for (int i = 0; i < MdConf.MdDisposeThreadNums; ++i)
@@ -917,8 +917,9 @@ CServiceEpoll::~CServiceEpoll()
 		delete[] it;
 }
 
-bool CServiceEpoll::Mf_Epoll_Start()
+bool CServiceEpoll::Mf_Epoll_Start(ServiceConf Conf)
 {
+	MdConf = Conf;
 	for (int i = 0; i < MdConf.MdDisposeThreadNums; ++i)		// 为各个处理线程建立epoll的描述符
 	{
 		MdEpoll_In_Fd.push_back(epoll_create(MdThreadAvgPeoples));

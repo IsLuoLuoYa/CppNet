@@ -568,6 +568,11 @@ bool CServiceNoBlock::Mf_NoBlock_Start()
 	return true;
 }
 
+bool CServiceNoBlock::Mf_NoBlock_Stop()
+{
+	MdThreadPool->MfStop();
+}
+
 bool CServiceNoBlock::Mf_Init_ListenSock()
 {
 	std::thread::id threadid = std::this_thread::get_id();
@@ -942,6 +947,11 @@ bool CServiceEpoll::Mf_Epoll_Start()
 		MdThreadPool->MfEnqueue(std::bind(&CServiceEpoll::Mf_Epoll_RecvAndDisposeThread, this, i));	// 启动多条处理线程,！！！！收线程和处理线程合并了！！！！
 	MdThreadPool->MfEnqueue(std::bind(&CServiceEpoll::Mf_Epoll_AcceptThread, this));		// 启动等待连接线程			
 	return true;
+}
+
+void CServiceEpoll::Mf_Epoll_Stop()
+{
+	CServiceNoBlock::Mf_NoBlock_Stop();
 }
 
 void CServiceEpoll::Mf_Epoll_AcceptThread()

@@ -321,19 +321,24 @@ private:
 	int                                 MdCount = 0;
 	std::mutex                          MdCountMutex;
 public:
-	CThreadPool() {};
+	CThreadPool() { MdIsStop = false; };
 	~CThreadPool()
 	{
-		MdIsStop = true;
-		MdQueueCondition.notify_all();
-		for (std::thread& worker : MdPool)
-			worker.join();
+		if (!MdIsStop)
+			MfStop();
 	}
 
 	void MfStart(size_t threads = 5)
 	{
 		for (size_t i = 0; i < threads; ++i)
 			MdPool.push_back(std::thread(&CThreadPool::MfTheadFun, this));
+	}
+	void MfStop()
+	{
+		MdIsStop = true;
+		MdQueueCondition.notify_all();
+		for (std::thread& worker : MdPool)
+			worker.join();
 	}
 
 	bool MfIsStop() { return MdIsStop; };
@@ -592,6 +597,7 @@ public:
 	CServiceNoBlock(ServiceConf Conf);
 	virtual ~CServiceNoBlock();
 	bool Mf_NoBlock_Start();		// 启动收发处理线程的非阻塞版本
+	bool Mf_NoBlock_Stop();
 protected:
 	bool Mf_Init_ListenSock();		// 初始化套接字
 private:
@@ -632,6 +638,7 @@ public:
 	CServiceEpoll(ServiceConf Conf);
 	virtual ~CServiceEpoll();
 	bool Mf_Epoll_Start();
+	void Mf_Epoll_Stop();
 private:
 	void Mf_Epoll_AcceptThread();							// 等待客户端连接的线程
 	void Mf_Epoll_RecvAndDisposeThread(int SeqNumber);		// 处理线程

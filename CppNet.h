@@ -544,12 +544,15 @@ public:
 	CClientLinkManage(int HeartSendInterval = 3);
 	~CClientLinkManage();
 	void MfStart();													// 启动收发线程
-	int MfCreateAddLink(ClientConf Conf);		// 如果需要建立新的连接，就new一个ClientLink，同时记录连接的目标，然后加入列表是，设置client可用
+	void MfStop();
+	bool MfCreateAddLink(ClientConf Conf);		// 如果需要建立新的连接，就new一个ClientLink，同时记录连接的目标，然后加入列表是，设置client可用
 	void MfCloseLink(std::string Linkname);							// 关闭某个连接
 	bool MfSendMsg(std::string name, int MsgId, const char* data, int len);
+private:
 	const char* MfGetRecvBufferP(std::string name);					// 返回接收缓冲区的指针，可以直接读这里的数据
 	bool MfHasMsg(std::string name);								// 判断缓冲区是否有数据
 	void MfPopFrontMsg(std::string name);							// 缓冲区数据按包弹出
+public:
 	bool MfLinkIsSurvive(std::string name);							// 某个服务是否活着
 private:
 	void MfSendThread();											// 发送线程，循环调用send，收发线程根据是否可用标志确定行为

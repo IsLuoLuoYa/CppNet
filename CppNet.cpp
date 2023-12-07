@@ -266,14 +266,8 @@ CClientLinkManage::CClientLinkManage(int HeartSendInterval) :
 
 CClientLinkManage::~CClientLinkManage()
 {
-	{
-		std::unique_lock<std::shared_mutex> lk(MdClientLinkListMtx);
-		for (auto it = MdClientLinkList.begin(); it != MdClientLinkList.end();)
-		{
-			it->second->MfClose();
-			MdClientLinkList.erase(it++);
-		}
-	}
+	if(!MdClientLinkList.empty())
+		MfStop();
 
 	if (nullptr != MdBarrier)
 		delete MdBarrier;
@@ -299,19 +293,25 @@ void CClientLinkManage::MfStart()
 	MdIsStart = 1;
 }
 
-int CClientLinkManage::MfCreateAddLink(ClientConf Conf)
+void CClientLinkManage::MfStop()
+{
+	std::unique_lock<std::shared_mutex> lk(MdClientLinkListMtx);
+	for (auto it = MdClientLinkList.begin(); it != MdClientLinkList.end();)
+	{
+		it->second->MfClose();
+		MdClientLinkList.erase(it++);
+	}
+}
+
+bool CClientLinkManage::MfCreateAddLink(ClientConf Conf)
 {
 	if (!MdIsStart.load())
-	{
-		return SOCKET_ERROR;
-	}
+		return false;
 
 	{
 		std::shared_lock<std::shared_mutex> lk(MdClientLinkListMtx);
 		if (MdClientLinkList.find(Conf.Linkname) != MdClientLinkList.end())
-		{
-			return SOCKET_ERROR;
-		}
+			return false;
 	}
 
 	CClientLink* temp = new	CClientLink(Conf.Linkname);
@@ -320,10 +320,10 @@ int CClientLinkManage::MfCreateAddLink(ClientConf Conf)
 	{
 		std::unique_lock<std::shared_mutex> lk(MdClientLinkListMtx);
 		MdClientLinkList.insert(std::pair<std::string, CClientLink*>(Conf.Linkname, temp));
-		return ret;
+		return true;
 	}
 	delete temp;
-	return SOCKET_ERROR;
+	return false;
 }
 
 void CClientLinkManage::MfCloseLink(std::string Linkname)

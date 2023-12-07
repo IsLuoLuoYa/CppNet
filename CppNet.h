@@ -591,7 +591,7 @@ protected:			// 这一组变量，用来在服务结束时，按accept recv disp
 public:
 	CServiceNoBlock(ServiceConf Conf);
 	virtual ~CServiceNoBlock();
-	void Mf_NoBlock_Start();		// 启动收发处理线程的非阻塞版本
+	bool Mf_NoBlock_Start();		// 启动收发处理线程的非阻塞版本
 protected:
 	bool Mf_Init_ListenSock();		// 初始化套接字
 private:

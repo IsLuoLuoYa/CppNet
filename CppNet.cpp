@@ -546,9 +546,10 @@ CServiceNoBlock::~CServiceNoBlock()
 	MdBarrier4 = nullptr;
 }
 
-void CServiceNoBlock::Mf_NoBlock_Start()
+bool CServiceNoBlock::Mf_NoBlock_Start()
 {
-	Mf_Init_ListenSock();
+	if (!Mf_Init_ListenSock())
+		return false;
 
 	// 处理线程同步
 	MdBarrier1->MfInit(MdConf.MdDisposeThreadNums + 2 + 1);	// 处理线程数量 + send和recv线程 + recv线程本身
@@ -563,6 +564,8 @@ void CServiceNoBlock::Mf_NoBlock_Start()
 		MdThreadPool->MfEnqueue(std::bind(&CServiceNoBlock::Mf_NoBlock_DisposeThread, this, i));	// 启动多条处理线程线程
 	MdThreadPool->MfEnqueue(std::bind(&CServiceNoBlock::Mf_NoBlock_RecvThread, this));			// 启动接收线程
 	MdThreadPool->MfEnqueue(std::bind(&CServiceNoBlock::Mf_NoBlock_AcceptThread, this));			// 启动等待连接线程
+
+	return true;
 }
 
 bool CServiceNoBlock::Mf_Init_ListenSock()

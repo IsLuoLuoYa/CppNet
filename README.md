@@ -12,8 +12,8 @@ Server:
     ServiceConf Conf;
     Conf.Ip = "";
     Conf.port = 4567;
-    CServiceEpoll S1(Conf);
-	S1.Mf_Epoll_Start();
+    CServiceEpoll S1();
+	S1.Mf_Epoll_Start(Conf);
 	//S1.Mf_NoBlock_Start(0, 4567);
 
     S1.RegMsg(200, [](CSocketObj* Cli, void* Data, int len)
@@ -27,9 +27,6 @@ Client:
 	CClientLinkManage Cli;
 	Cli.MfStart();
 
-	std::string L1("t1");
-	std::string L2("t2");
-
 	ClientConf Conf1;
 	ClientConf Conf2;
 	Conf1.Linkname = "t1";
@@ -40,15 +37,15 @@ Client:
 	Conf2.Ip = "192.168.1.7";
 	Conf2.port = 4567;
 	Cli.MfCreateAddLink(Conf1);
-	Cli.MfCreateAddLink(Conf1);
+	//Cli.MfCreateAddLink(Conf2);
 
-	Cli.RegMsg(L1, 100, [](CSocketObj* Ser, void* Data, int len)
+	Cli.RegMsg(Conf1.Linkname, 100, [](CSocketObj* Ser, void* Data, int len)
 		{
 			printf("%s\n", Data);
 		});
 
 	while(1)
 	{
-		Cli.MfSendMsg(L1, 200, "aaaaa\0", 5);
+		Cli.MfSendMsg(Conf1.Linkname, 200, "aaaaa\0", 5);
 		Sleep(1000);
 	}

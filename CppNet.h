@@ -602,7 +602,8 @@ public:
 	virtual ~CServiceNoBlock();
 	void Init();
 	bool Mf_NoBlock_Start(ServiceConf Conf);		// 启动收发处理线程的非阻塞版本
-	bool Mf_NoBlock_Stop();
+	bool Mf_NoBlock_Stop();							// 遍历所有连接
+	void VisitSocketObj(std::function<bool(CSocketObj*)> Fun);
 protected:
 	bool Mf_Init_ListenSock();		// 初始化套接字
 private:

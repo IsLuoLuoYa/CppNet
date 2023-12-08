@@ -529,6 +529,25 @@ bool CServiceNoBlock::Mf_NoBlock_Stop()
 	MdThreadPool->MfStop();
 }
 
+void CServiceNoBlock::VisitSocketObj(std::function<bool(CSocketObj*)> Fun)
+{
+	for (int i = 0; i < MdConf.MdDisposeThreadNums; ++i)
+	{
+		bool Isbreak = false;
+		std::shared_lock<std::shared_mutex> ReadLock(MdPClientFormalListMtx[i]);		
+		for (auto it = MdPClientFormalList[i].begin(); it != MdPClientFormalList[i].end(); ++it)
+		{
+			if (!Fun(it->second))
+			{
+				Isbreak = true;
+				break;
+			}
+		}
+		if (Isbreak)
+			break;
+	}
+}
+
 bool CServiceNoBlock::Mf_Init_ListenSock()
 {
 	std::thread::id threadid = std::this_thread::get_id();

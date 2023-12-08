@@ -405,7 +405,7 @@ public:
 	bool MfSendMsg(CNetMsg* Msg);
 	int MfBufferToSocket(SOCKET sock);					// 数据从 缓冲区 写到 套接字，返回值主要用于判断socket是否出错，出错条件是send或recv返回值<=0
 
-	int MfSocketToBuffer(SOCKET sock);		// 数据从 套接字 写到 缓冲区，返回值主要用于判断socket是否出错，出错条件是send或recv返回值<=0
+	int		MfSocketToBuffer(SOCKET sock);		// 数据从 套接字 写到 缓冲区，返回值主要用于判断socket是否出错，出错条件是send或recv返回值<=0
 	bool MfPopFrontMsg(char* Buff, int BuffLen);		// 弹出缓冲区中的第一条消息
 
 private:
@@ -436,7 +436,7 @@ public:
 
 	void	MfSetPeerAddr(sockaddr_in* addr)	/*设置对端IP和端口*/ { MdPort = ntohs(addr->sin_port); strcpy(MdIP, inet_ntoa(addr->sin_addr)); }
 
-	char* MfGetPeerIP()						/*获取对端IP*/ { return MdIP; }
+	char*	MfGetPeerIP()						/*获取对端IP*/ { return MdIP; }
 	int		MfGetPeerPort()						/*获取对端端口*/ { return MdPort; }
 
 	void	MfSetThreadIndex(int index)			/*设置线程索引*/ { MdThreadIndex = index; }
@@ -528,13 +528,13 @@ private:
 	std::unordered_map<std::string, CClientLink*>		MdClientLinkList;
 	std::shared_mutex						MdClientLinkListMtx;
 	std::atomic<int>						MdIsStart = 0;			// 收发线程是否启动，不启动时，不能添加连接，因为如果放在构造中启动线程是危险的
-	Barrier MdBarrier;				// 用于创建连接前的收发线程启动
+	Barrier									MdBarrier;				// 用于创建连接前的收发线程启动
 	int										MdHeartSendInterval;	// 心跳发送时间间隔，单位秒
-	CNetMsgHead* MdDefautHeartPacket;	// 默认的心跳包对象
-	CTimer* MdHeartTime;			// 心跳计时器对象
+	CNetMsgHead								MdDefautHeartPacket;	// 默认的心跳包对象
+	CTimer									MdHeartTime;			// 心跳计时器对象
 	CThreadPool								MdThreadPool;
 
-	int	MdPublicCacheLen = 0;		// 每条处理线程一个公共缓冲区,处理数据取出时也是trylock,然后把消息写到这里
+	int	MdPublicCacheLen;			// 每条处理线程一个公共缓冲区,处理数据取出时也是trylock,然后把消息写到这里
 	char* MdPublicCache;			// 这样dispose线程就不会小概率卡住了
 private:
 	bool MfSendData(std::string str, const char* data, int len);	// 发送数据，插入缓冲区
@@ -574,22 +574,22 @@ struct ServiceConf
 class CServiceNoBlock
 {
 protected:
-	SOCKET								MdListenSock;				// 监听套接字
-	ServiceConf							MdConf;						// 各种参数
-	CTimer MdHeartBeatTestInterval;	// 心跳间隔检测用到的计时器
-	CObjectPool<CSocketObj>* Md_CSocketObj_POOL;			// 客户端对象的对象池
-	std::unordered_map<SOCKET, CSocketObj*>* MdPClientJoinList;			// 非正式客户端缓冲列表，等待加入正式列表，同正式客户列表一样，一个线程对应一个加入列表
-	std::mutex* MdPClientJoinListMtx;		// 非正式客户端列表的锁
-	std::unordered_map<SOCKET, CSocketObj*>* MdPClientFormalList;		// 正式的客户端列表，一个线程对应一个map[],存储当前线程的服务对象,map[threadid]找到对应map，map[threadid][socket]找出socket对应的数据
-	std::shared_mutex* MdPClientFormalListMtx;		// 为一MdPEachDisoposeThreadOfServiceObj[]添加sock时，应MdEachThreadOfMtx[].lock
-	std::unordered_map<SOCKET, CSocketObj*>* MdClientLeaveList;			// 等待从正式列表中移除的缓冲列表
-	std::mutex* MdClientLeaveListMtx;		// 移除列表的锁
-	CThreadPool* MdThreadPool;
+	SOCKET										MdListenSock;				// 监听套接字
+	ServiceConf									MdConf;						// 各种参数
+	CTimer										MdHeartBeatTestInterval;	// 心跳间隔检测用到的计时器
+	std::vector<CObjectPool<CSocketObj>*>		Md_CSocketObj_POOL;			// 客户端对象的对象池
+	std::unordered_map<SOCKET, CSocketObj*>*	MdPClientJoinList;			// 非正式客户端缓冲列表，等待加入正式列表，同正式客户列表一样，一个线程对应一个加入列表
+	std::mutex*									MdPClientJoinListMtx;		// 非正式客户端列表的锁
+	std::unordered_map<SOCKET, CSocketObj*>*	MdPClientFormalList;		// 正式的客户端列表，一个线程对应一个map[],存储当前线程的服务对象,map[threadid]找到对应map，map[threadid][socket]找出socket对应的数据
+	std::shared_mutex*							MdPClientFormalListMtx;		// 为一MdPEachDisoposeThreadOfServiceObj[]添加sock时，应MdEachThreadOfMtx[].lock
+	std::unordered_map<SOCKET, CSocketObj*>*	MdClientLeaveList;			// 等待从正式列表中移除的缓冲列表
+	std::mutex*									MdClientLeaveListMtx;		// 移除列表的锁
+	CThreadPool*								MdThreadPool;
+	std::unordered_map<int, MsgFunType>			MsgDealFuncMap;				// 注册的消息列表
 
-	int	MdPublicCacheLen = 0;		// 每条处理线程一个公共缓冲区,处理数据取出时也是trylock,然后把消息写到这里
-	std::vector<char*> MdPublicCache;			// 这样dispose线程就不会小概率卡住了
+	int					MdPublicCacheLen = 0;	// 每条处理线程一个公共缓冲区,处理数据取出时也是trylock,然后把消息写到这里
+	std::vector<char*>	MdPublicCache;			// 这样dispose线程就不会小概率卡住了
 
-	std::unordered_map<int, MsgFunType>			MsgDealFuncMap;
 protected:			// 用来在服务启动时，等待其他所有线程启动后，再启动Accept线程
 	Barrier MdBarrier1;
 protected:			// 这一组变量，用来在服务结束时，按accept recv dispose send的顺序来结束线程以保证不出错

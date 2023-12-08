@@ -237,12 +237,9 @@ int CClientLink::MfClose()
 
 CClientLinkManage::CClientLinkManage(int HeartSendInterval) :
 	MdHeartSendInterval(HeartSendInterval),
-	MdDefautHeartPacket(nullptr),
-	MdHeartTime(nullptr),
 	MdPublicCacheLen(1024 * 200)
 {
-	MdDefautHeartPacket = new CNetMsgHead;
-	MdHeartTime = new CTimer;
+	MdPublicCache = nullptr;
 	MdPublicCache = new char[MdPublicCacheLen];
 }
 
@@ -251,13 +248,9 @@ CClientLinkManage::~CClientLinkManage()
 	if(!MdClientLinkList.empty())
 		MfStop();
 
-	if (nullptr != MdDefautHeartPacket)
-		delete MdDefautHeartPacket;
-	MdDefautHeartPacket = nullptr;
-
-	if (nullptr != MdHeartTime)
-		delete MdHeartTime;
-	MdHeartTime = nullptr;
+	if (nullptr != MdPublicCache)
+		delete MdPublicCache;
+	MdPublicCache = nullptr;
 }
 
 void CClientLinkManage::MfStart()
@@ -355,12 +348,12 @@ void CClientLinkManage::MfSendThread()
 	while (!MdThreadPool.MfIsStop())
 	{
 		// 为每个连接发送心跳包,这里是把心跳包加入第二缓冲区，之后一起由循环整个一起发送
-		if (MdHeartTime->getElapsedSecond() > MdHeartSendInterval)
+		if (MdHeartTime.getElapsedSecond() > MdHeartSendInterval)
 		{
 			std::shared_lock<std::shared_mutex> lk(MdClientLinkListMtx);
 			for (auto it = MdClientLinkList.begin(); it != MdClientLinkList.end(); ++it)
-				it->second->MfDataToBuffer((const char*)MdDefautHeartPacket, sizeof(CNetMsgHead));
-			MdHeartTime->update();
+				it->second->MfDataToBuffer((const char*)&MdDefautHeartPacket, sizeof(CNetMsgHead));
+			MdHeartTime.update();
 		}
 
 		// 加括号使锁提前释放
@@ -421,7 +414,6 @@ bool CClientLinkManage::RegMsg(std::string LinkName, int MsgId, MsgFunType fun)
 }
 
 CServiceNoBlock::CServiceNoBlock() :
-	Md_CSocketObj_POOL(nullptr),
 	MdPClientJoinList(nullptr),
 	MdPClientJoinListMtx(nullptr),
 	MdPClientFormalList(nullptr),
@@ -439,10 +431,6 @@ CServiceNoBlock::~CServiceNoBlock()
 	if (MdThreadPool)
 		delete MdThreadPool;
 	MdThreadPool = nullptr;
-
-	if (Md_CSocketObj_POOL)
-		delete Md_CSocketObj_POOL;
-	Md_CSocketObj_POOL = nullptr;
 
 	if (MdPClientFormalList)
 		delete[] MdPClientFormalList;
@@ -467,11 +455,16 @@ CServiceNoBlock::~CServiceNoBlock()
 	if (MdClientLeaveListMtx)
 		delete[] MdClientLeaveListMtx;
 	MdClientLeaveListMtx = nullptr;
+
+	for (auto& it : MdPublicCache)
+		delete[] it;
+	MdPublicCache.clear();
 }
 
 void CServiceNoBlock::Init()
 {
-	Md_CSocketObj_POOL = new CObjectPool<CSocketObj>(MdConf.MdServiceMaxPeoples);
+	for (int i = 0; i < MdConf.MdDisposeThreadNums; ++i)
+		Md_CSocketObj_POOL.push_back(new CObjectPool<CSocketObj>(MdConf.MdServiceMaxPeoples / MdConf.MdDisposeThreadNums + 10));
 	MdPClientFormalList = new std::unordered_map<SOCKET, CSocketObj*>[MdConf.MdDisposeThreadNums];
 	MdPClientFormalListMtx = new std::shared_mutex[MdConf.MdDisposeThreadNums];
 	MdPClientJoinList = new std::unordered_map<SOCKET, CSocketObj*>[MdConf.MdDisposeThreadNums];
@@ -640,7 +633,7 @@ void CServiceNoBlock::Mf_NoBlock_AcceptThread()
 					minId = i;
 				}
 			}
-			CSocketObj* TempSocketObj = Md_CSocketObj_POOL->MfApplyObject(sock, MdConf.SecondBufferSendLen, MdConf.SecondBufferRecvLen);
+			CSocketObj* TempSocketObj = Md_CSocketObj_POOL[minId]->MfApplyObject(sock, MdConf.SecondBufferSendLen, MdConf.SecondBufferRecvLen);
 			TempSocketObj->MfSetPeerAddr(&addr);
 			TempSocketObj->MfSetThreadIndex(minId);
 			std::lock_guard<std::mutex> lk(MdPClientJoinListMtx[minId]);								// 对应的线程map上锁
@@ -801,7 +794,7 @@ void CServiceNoBlock::Mf_NoBlock_SendThread()
 		for (auto it = MdPClientFormalList[i].begin(); it != MdPClientFormalList[i].end(); ++it)
 		{
 			it->second->MfClose();
-			Md_CSocketObj_POOL->MfReturnObject(it->second);
+			Md_CSocketObj_POOL[i]->MfReturnObject(it->second);
 		}
 	}
 }
@@ -851,7 +844,7 @@ void CServiceNoBlock::Mf_NoBlock_ClientLeave(std::thread::id threadid, int SeqNu
 			{
 				MdPClientFormalList[SeqNumber].erase(it->first);
 				it->second->MfClose();
-				Md_CSocketObj_POOL->MfReturnObject(it->second);
+				Md_CSocketObj_POOL[SeqNumber]->MfReturnObject(it->second);
 			}
 			MdClientLeaveList[SeqNumber].clear();
 		}
@@ -976,7 +969,7 @@ void CServiceEpoll::Mf_Epoll_AcceptThread()
 					minId = i;
 				}
 			}
-			CSocketObj* TempSocketObj = Md_CSocketObj_POOL->MfApplyObject(sock, MdConf.SecondBufferSendLen, MdConf.SecondBufferRecvLen);
+			CSocketObj* TempSocketObj = Md_CSocketObj_POOL[minId]->MfApplyObject(sock, MdConf.SecondBufferSendLen, MdConf.SecondBufferRecvLen);
 			TempSocketObj->MfSetPeerAddr(&addr);
 			TempSocketObj->MfSetThreadIndex(minId);
 			std::lock_guard<std::mutex> lk(MdPClientJoinListMtx[minId]);								// 对应的线程map上锁
@@ -1122,7 +1115,7 @@ void CServiceEpoll::Mf_Epoll_SendThread()
 		for (auto it = MdPClientFormalList[i].begin(); it != MdPClientFormalList[i].end(); ++it)
 		{
 			it->second->MfClose();
-			Md_CSocketObj_POOL->MfReturnObject(it->second);
+			Md_CSocketObj_POOL[i]->MfReturnObject(it->second);
 		}
 	}
 }
@@ -1175,7 +1168,7 @@ void CServiceEpoll::Mf_Epoll_ClientLeave(std::thread::id threadid, int SeqNumber
 				it->second->MfClose();
 				epoll_ctl(MdEpoll_In_Fd[SeqNumber], EPOLL_CTL_DEL, it->first, nullptr);
 				MdPClientFormalList[SeqNumber].erase(it->first);
-				Md_CSocketObj_POOL->MfReturnObject(it->second);
+				Md_CSocketObj_POOL[SeqNumber]->MfReturnObject(it->second);
 			}
 			MdClientLeaveList[SeqNumber].clear();
 		}

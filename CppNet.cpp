@@ -2,12 +2,6 @@
 
 static CppNetStart Global_NewNetStartObj;
 
-CSecondBuffer::CSecondBuffer() :MdPBuffer(nullptr), MdBufferLen(-1), Mdtail(0)
-{
-	MdBufferLen = DEFAULTBUFFERLEN;
-	MdPBuffer = new char[MdBufferLen] {};
-}
-
 CSecondBuffer::CSecondBuffer(int bufferlen) :MdPBuffer(nullptr), MdBufferLen(-1), Mdtail(0)
 {
 	if (bufferlen <= 0)
@@ -168,24 +162,14 @@ bool CSecondBuffer::MfRecv(SOCKET sock, void* buf, int len, int* ret)
 	}
 }
 
-CSocketObj::CSocketObj(SOCKET sock, int SendBuffLen, int RecvBuffLen) :MdSock(sock), MdPSendBuffer(nullptr), MdPRecvBuffer(nullptr), MdHeartBeatTimer(nullptr)
+CSocketObj::CSocketObj(SOCKET sock, int SendBuffLen, int RecvBuffLen) :MdSock(sock), MdPSendBuffer(SendBuffLen), MdPRecvBuffer(RecvBuffLen)
 {
-	MdPSendBuffer = new CSecondBuffer(SendBuffLen);
-	MdPRecvBuffer = new CSecondBuffer(RecvBuffLen);
-	MdHeartBeatTimer = new CTimer();
+
 }
 
 CSocketObj::~CSocketObj()
 {
-	if (MdPSendBuffer)
-		delete MdPSendBuffer;
-	MdPSendBuffer = nullptr;
-	if (MdPRecvBuffer)
-		delete MdPRecvBuffer;
-	MdPRecvBuffer = nullptr;
-	if (MdHeartBeatTimer)
-		delete MdHeartBeatTimer;
-	MdHeartBeatTimer = nullptr;
+
 }
 
 int CClientLink::MfConnect(const char* ip, unsigned short port)

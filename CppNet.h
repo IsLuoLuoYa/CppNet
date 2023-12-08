@@ -395,7 +395,6 @@ private:
 	int			MdBufferLen = -1;			// 缓冲区长度
 	int			Mdtail = 0;
 	std::mutex	MdMtx;						// 操作数据指针时需要的互斥元
-	CSecondBuffer();
 public:
 	CSecondBuffer(int bufferlen = DEFAULTBUFFERLEN);
 	~CSecondBuffer();
@@ -419,9 +418,9 @@ class CSocketObj
 private:
 	SOCKET				MdSock;					// socket
 	int					MdThreadIndex;			// 当前socket对象位于线程的线程索引，哪个dispose线程，service用
-	CSecondBuffer* MdPSendBuffer;			// 发送缓冲区
-	CSecondBuffer* MdPRecvBuffer;			// 接收缓冲区
-	CTimer* MdHeartBeatTimer;		// 心跳计时器
+	CSecondBuffer		MdPSendBuffer;			// 发送缓冲区
+	CSecondBuffer		MdPRecvBuffer;			// 接收缓冲区
+	CTimer				MdHeartBeatTimer;		// 心跳计时器
 	char				MdIP[20];				// sock对端的地址
 	int					MdPort;					// sock对端的地址
 public:
@@ -430,10 +429,10 @@ public:
 public:
 	SOCKET	MfGetSock() { return MdSock; }
 
-	char* MfGetRecvBufP()						/*返回接收缓冲区原始指针*/ { return MdPRecvBuffer->MfGetBufferP(); }
+	char* MfGetRecvBufP()						/*返回接收缓冲区原始指针*/ { return MdPRecvBuffer.MfGetBufferP(); }
 
-	int		MfRecv()							/*为该对象接收数据*/ { return MdPRecvBuffer->MfSocketToBuffer(MdSock); }
-	int		MfSend()							/*为该对象发送数据*/ { return MdPSendBuffer->MfBufferToSocket(MdSock); }
+	int		MfRecv()							/*为该对象接收数据*/ { return MdPRecvBuffer.MfSocketToBuffer(MdSock); }
+	int		MfSend()							/*为该对象发送数据*/ { return MdPSendBuffer.MfBufferToSocket(MdSock); }
 
 	void	MfSetPeerAddr(sockaddr_in* addr)	/*设置对端IP和端口*/ { MdPort = ntohs(addr->sin_port); strcpy(MdIP, inet_ntoa(addr->sin_addr)); }
 
@@ -443,10 +442,10 @@ public:
 	void	MfSetThreadIndex(int index)			/*设置线程索引*/ { MdThreadIndex = index; }
 	int		MfGetThreadIndex()					/*获取线程索引，哪个dispose线程，service用*/ { return MdThreadIndex; }
 	
-	bool	MfPopFrontMsg(char* Buff, int BuffLen)		/*第一条信息移出接收缓冲区*/ { return MdPRecvBuffer->MfPopFrontMsg(Buff, BuffLen); }
+	bool	MfPopFrontMsg(char* Buff, int BuffLen)		/*第一条信息移出接收缓冲区*/ { return MdPRecvBuffer.MfPopFrontMsg(Buff, BuffLen); }
 
-	void	MfHeartBeatUpDate()					/*更新心跳计时*/ { MdHeartBeatTimer->update(); }
-	bool	MfHeartIsTimeOut(int seconds)		/*传入一个秒数，返回是否超过该值设定的时间*/ { return seconds < MdHeartBeatTimer->getElapsedSecond(); }
+	void	MfHeartBeatUpDate()					/*更新心跳计时*/ { MdHeartBeatTimer.update(); }
+	bool	MfHeartIsTimeOut(int seconds)		/*传入一个秒数，返回是否超过该值设定的时间*/ { return seconds < MdHeartBeatTimer.getElapsedSecond(); }
 
 	int		MfClose()							/*关闭套接字*/
 	{
@@ -458,14 +457,14 @@ public:
 	}
 
 
-	bool	MfDataToBuffer(const char* data, int len)		/*压数据到发送缓冲区*/ { return MdPSendBuffer->MfDataToBuffer(data, len); }
+	bool	MfDataToBuffer(const char* data, int len)		/*压数据到发送缓冲区*/ { return MdPSendBuffer.MfDataToBuffer(data, len); }
 	bool	MfSendMsg(int MsgId, const char* data, int len)
 	{
 		CNetMsg Msg;
 		Msg.Head.MdCmd = MsgId;
 		Msg.Head.MdLen = len + sizeof(CNetMsgHead);
 		Msg.Data = data;
-		return MdPSendBuffer->MfSendMsg(&Msg);
+		return MdPSendBuffer.MfSendMsg(&Msg);
 	}
 };
 
@@ -484,7 +483,7 @@ class CClientLink
 {
 private:
 	ClientConf				MdConf;
-	CSocketObj* MdClientSock = 0;	// 客户连接对象
+	CSocketObj*				MdClientSock = 0;	// 客户连接对象
 	std::atomic<int>		MdIsConnect = 0;	// 表示是否连接成功	
 	std::unordered_map<int, MsgFunType> MsgDealFuncMap;
 private:

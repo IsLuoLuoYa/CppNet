@@ -407,9 +407,7 @@ public:
 	int MfBufferToSocket(SOCKET sock);					// 数据从 缓冲区 写到 套接字，返回值主要用于判断socket是否出错，出错条件是send或recv返回值<=0
 
 	int MfSocketToBuffer(SOCKET sock);		// 数据从 套接字 写到 缓冲区，返回值主要用于判断socket是否出错，出错条件是send或recv返回值<=0
-	bool MfHasMsg();						// 缓冲区中是否够一条消息的长度
-	void MfPopFrontMsg();					// 弹出缓冲区中的第一条消息
-	void MfBufferPopData(int len);			// 缓冲区中数据弹出
+	bool MfPopFrontMsg(char* Buff, int BuffLen);		// 弹出缓冲区中的第一条消息
 
 private:
 	bool MfSend(SOCKET sock, const char* buf, int len, int* ret);	// 封装SEND和RECV调用其非阻塞模式，并处理两个问题
@@ -444,9 +442,8 @@ public:
 
 	void	MfSetThreadIndex(int index)			/*设置线程索引*/ { MdThreadIndex = index; }
 	int		MfGetThreadIndex()					/*获取线程索引，哪个dispose线程，service用*/ { return MdThreadIndex; }
-
-	bool	MfHasMsg()							/*接收缓冲区是否有消息*/ { return MdPRecvBuffer->MfHasMsg(); }
-	void	MfPopFrontMsg()						/*第一条信息移出接收缓冲区*/ { MdPRecvBuffer->MfPopFrontMsg(); }
+	
+	bool	MfPopFrontMsg(char* Buff, int BuffLen)		/*第一条信息移出接收缓冲区*/ { return MdPRecvBuffer->MfPopFrontMsg(Buff, BuffLen); }
 
 	void	MfHeartBeatUpDate()					/*更新心跳计时*/ { MdHeartBeatTimer->update(); }
 	bool	MfHeartIsTimeOut(int seconds)		/*传入一个秒数，返回是否超过该值设定的时间*/ { return seconds < MdHeartBeatTimer->getElapsedSecond(); }
@@ -505,8 +502,7 @@ public:
 	bool MfDataToBuffer(const char* data, int len)		/*供调用者插入数据，插入数据到发送缓冲区*/ { return MdClientSock->MfDataToBuffer(data, len); }
 	bool MfSendMsg(int MsgId, const char* data, int len)/*发消息*/ { return MdClientSock->MfSendMsg(MsgId, data, len); }
 	const char* MfGetRecvBufferP()						/*供使用者处理数据，取得接收缓冲区原始指针*/ { return MdClientSock->MfGetRecvBufP(); }
-	bool MfHasMsg()										/*供使用者处理数据，缓冲区是否有消息*/ { return MdClientSock->MfHasMsg(); }
-	void MfPopFrontMsg()								/*供使用者处理数据，第一条信息移出缓冲区*/ { MdClientSock->MfPopFrontMsg(); }
+	bool MfPopFrontMsg(char* Buff, int BuffLen)								/*供使用者处理数据，第一条信息移出缓冲区*/ { MdClientSock->MfPopFrontMsg(Buff, BuffLen); }
 
 public:
 	bool RegMsg(int MsgId, MsgFunType fun)
@@ -533,11 +529,14 @@ private:
 	std::unordered_map<std::string, CClientLink*>		MdClientLinkList;
 	std::shared_mutex						MdClientLinkListMtx;
 	std::atomic<int>						MdIsStart = 0;			// 收发线程是否启动，不启动时，不能添加连接，因为如果放在构造中启动线程是危险的
-	Barrier* MdBarrier;				// 用于创建连接前的收发线程启动
+	Barrier MdBarrier;				// 用于创建连接前的收发线程启动
 	int										MdHeartSendInterval;	// 心跳发送时间间隔，单位秒
 	CNetMsgHead* MdDefautHeartPacket;	// 默认的心跳包对象
 	CTimer* MdHeartTime;			// 心跳计时器对象
 	CThreadPool								MdThreadPool;
+
+	int	MdPublicCacheLen = 0;		// 每条处理线程一个公共缓冲区,处理数据取出时也是trylock,然后把消息写到这里
+	char* MdPublicCache;			// 这样dispose线程就不会小概率卡住了
 private:
 	bool MfSendData(std::string str, const char* data, int len);	// 发送数据，插入缓冲区
 public:
@@ -550,8 +549,6 @@ public:
 	bool MfSendMsg(std::string name, int MsgId, const char* data, int len);
 private:
 	const char* MfGetRecvBufferP(std::string name);					// 返回接收缓冲区的指针，可以直接读这里的数据
-	bool MfHasMsg(std::string name);								// 判断缓冲区是否有数据
-	void MfPopFrontMsg(std::string name);							// 缓冲区数据按包弹出
 public:
 	bool MfLinkIsSurvive(std::string name);							// 某个服务是否活着
 private:
@@ -580,7 +577,7 @@ class CServiceNoBlock
 protected:
 	SOCKET								MdListenSock;				// 监听套接字
 	ServiceConf							MdConf;						// 各种参数
-	CTimer* MdHeartBeatTestInterval;	// 心跳间隔检测用到的计时器
+	CTimer MdHeartBeatTestInterval;	// 心跳间隔检测用到的计时器
 	CObjectPool<CSocketObj>* Md_CSocketObj_POOL;			// 客户端对象的对象池
 	std::unordered_map<SOCKET, CSocketObj*>* MdPClientJoinList;			// 非正式客户端缓冲列表，等待加入正式列表，同正式客户列表一样，一个线程对应一个加入列表
 	std::mutex* MdPClientJoinListMtx;		// 非正式客户端列表的锁
@@ -589,16 +586,21 @@ protected:
 	std::unordered_map<SOCKET, CSocketObj*>* MdClientLeaveList;			// 等待从正式列表中移除的缓冲列表
 	std::mutex* MdClientLeaveListMtx;		// 移除列表的锁
 	CThreadPool* MdThreadPool;
+
+	int	MdPublicCacheLen = 0;		// 每条处理线程一个公共缓冲区,处理数据取出时也是trylock,然后把消息写到这里
+	std::vector<char*> MdPublicCache;			// 这样dispose线程就不会小概率卡住了
+
 	std::unordered_map<int, MsgFunType>			MsgDealFuncMap;
 protected:			// 用来在服务启动时，等待其他所有线程启动后，再启动Accept线程
-	Barrier* MdBarrier1;
+	Barrier MdBarrier1;
 protected:			// 这一组变量，用来在服务结束时，按accept recv dispose send的顺序来结束线程以保证不出错
-	Barrier* MdBarrier2;		// accept线程		和	recv线程			的同步变量		！！！！！在epoll中未被使用！！！！！
-	Barrier* MdBarrier3;		// recv线程			和	所有dispos线程		的同步变量
-	Barrier* MdBarrier4;		// send线程			和	dispose线程			的同步和前面不同，用屏障的概念等待多个线程来继续执行
+	Barrier MdBarrier2;		// accept线程		和	recv线程			的同步变量		！！！！！在epoll中未被使用！！！！！
+	Barrier MdBarrier3;		// recv线程			和	所有dispos线程		的同步变量
+	Barrier MdBarrier4;		// send线程			和	dispose线程			的同步和前面不同，用屏障的概念等待多个线程来继续执行
 public:
 	CServiceNoBlock();
 	virtual ~CServiceNoBlock();
+	void Init();
 	bool Mf_NoBlock_Start(ServiceConf Conf);		// 启动收发处理线程的非阻塞版本
 	bool Mf_NoBlock_Stop();
 protected:

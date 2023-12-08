@@ -101,30 +101,28 @@ int CSecondBuffer::MfSocketToBuffer(SOCKET sock)
 	return INT32_MAX;
 }
 
-bool CSecondBuffer::MfHasMsg()
+bool CSecondBuffer::MfPopFrontMsg(char* Buff, int BuffLen)
 {
 	static int MSG_HEAD_LEN = sizeof(CNetMsgHead);
-	if (Mdtail >= MSG_HEAD_LEN)
-		return Mdtail >= ((CNetMsgHead*)MdPBuffer)->MdLen;
-	return false;
-}
+	std::unique_lock<std::mutex> lk(MdMtx, std::defer_lock);
+	if (!lk.try_lock())
+		return false;
+	if (Mdtail <= MSG_HEAD_LEN)
+		return false;
+	int MsgLen = ((CNetMsgHead*)MdPBuffer)->MdLen;
+	if (Mdtail < MsgLen)
+		return false;
+	if (BuffLen < MsgLen)
+		return false;
 
-void CSecondBuffer::MfPopFrontMsg()
-{
-	if (MfHasMsg())
-		MfBufferPopData(((CNetMsgHead*)MdPBuffer)->MdLen);
-}
-
-void CSecondBuffer::MfBufferPopData(int len)
-{
-	std::lock_guard<std::mutex> lk(MdMtx);
-	int n = Mdtail - len;
-	//printf("tail:%d, len:%d\n", Mdtail, len);
+	memcpy(Buff, MdPBuffer, MsgLen);
+	int n = Mdtail - MsgLen;
 	if (n >= 0)
 	{
-		memcpy(MdPBuffer, MdPBuffer + len, n);
+		memcpy(MdPBuffer, MdPBuffer + MsgLen, n);
 		Mdtail = n;
 	}
+	return true;
 }
 
 bool CSecondBuffer::MfSend(SOCKET sock, const char* buf, int len, int* ret)
@@ -254,24 +252,20 @@ int CClientLink::MfClose()
 }
 
 CClientLinkManage::CClientLinkManage(int HeartSendInterval) :
-	MdBarrier(nullptr),
 	MdHeartSendInterval(HeartSendInterval),
 	MdDefautHeartPacket(nullptr),
-	MdHeartTime(nullptr)
+	MdHeartTime(nullptr),
+	MdPublicCacheLen(1024 * 200)
 {
-	MdBarrier = new Barrier;
 	MdDefautHeartPacket = new CNetMsgHead;
 	MdHeartTime = new CTimer;
+	MdPublicCache = new char[MdPublicCacheLen];
 }
 
 CClientLinkManage::~CClientLinkManage()
 {
 	if(!MdClientLinkList.empty())
 		MfStop();
-
-	if (nullptr != MdBarrier)
-		delete MdBarrier;
-	MdBarrier = nullptr;
 
 	if (nullptr != MdDefautHeartPacket)
 		delete MdDefautHeartPacket;
@@ -284,12 +278,12 @@ CClientLinkManage::~CClientLinkManage()
 
 void CClientLinkManage::MfStart()
 {
-	MdBarrier->MfInit(3);
+	MdBarrier.MfInit(3);
 	MdThreadPool.MfStart(2);
 	// 启动收发线程,需要做的是在启动收发线程前不应该建立连接
 	MdThreadPool.MfEnqueue(std::bind(&CClientLinkManage::MfSendThread, this));
 	MdThreadPool.MfEnqueue(std::bind(&CClientLinkManage::MfRecvThread, this));
-	MdBarrier->MfWait();
+	MdBarrier.MfWait();
 	MdIsStart = 1;
 }
 
@@ -360,23 +354,6 @@ const char* CClientLinkManage::MfGetRecvBufferP(std::string name)
 		return nullptr;
 	return it->second->MfGetRecvBufferP();
 }
-
-bool CClientLinkManage::MfHasMsg(std::string name)
-{
-	auto it = MdClientLinkList.find(name);
-	if (it == MdClientLinkList.end())
-		return false;
-	return it->second->MfHasMsg();
-}
-
-void CClientLinkManage::MfPopFrontMsg(std::string name)
-{
-	auto it = MdClientLinkList.find(name);
-	if (it == MdClientLinkList.end())
-		return;
-	return it->second->MfPopFrontMsg();
-}
-
 bool CClientLinkManage::MfLinkIsSurvive(std::string name)
 {
 	std::shared_lock<std::shared_mutex> lk(MdClientLinkListMtx);
@@ -388,7 +365,7 @@ void CClientLinkManage::MfSendThread()
 {
 	std::thread::id threadid = std::this_thread::get_id();
 
-	MdBarrier->MfWait();
+	MdBarrier.MfWait();
 
 	// 主循环
 	while (!MdThreadPool.MfIsStop())
@@ -418,7 +395,7 @@ void CClientLinkManage::MfRecvThread()
 {
 	std::thread::id threadid = std::this_thread::get_id();
 
-	MdBarrier->MfWait();
+	MdBarrier.MfWait();
 
 	// 主循环
 	while (!MdThreadPool.MfIsStop())
@@ -437,13 +414,12 @@ void CClientLinkManage::MfRecvThread()
 					continue;
 				}
 
-				while (it->second->MfHasMsg())
+				while (it->second->MfPopFrontMsg(MdPublicCache, MdPublicCacheLen))
 				{
 					if (-1 == ((CNetMsgHead*)(it->second->MfGetRecvBufferP()))->MdCmd)	// 当该包的该字段为-1时，代表心跳
 						it->second->GetScoketObj()->MfHeartBeatUpDate();
 					else
-						it->second->MfVNetMsgDisposeFun(it->second->MfGetSocket(), it->second->GetScoketObj(), (CNetMsgHead*)it->second->MfGetRecvBufferP(), threadid);
-					it->second->MfPopFrontMsg();
+						it->second->MfVNetMsgDisposeFun(it->second->MfGetSocket(), it->second->GetScoketObj(), (CNetMsgHead*)MdPublicCache, threadid);
 				}
 				++it;
 			}
@@ -461,7 +437,6 @@ bool CClientLinkManage::RegMsg(std::string LinkName, int MsgId, MsgFunType fun)
 }
 
 CServiceNoBlock::CServiceNoBlock() :
-	MdHeartBeatTestInterval(nullptr),
 	Md_CSocketObj_POOL(nullptr),
 	MdPClientJoinList(nullptr),
 	MdPClientJoinListMtx(nullptr),
@@ -469,25 +444,10 @@ CServiceNoBlock::CServiceNoBlock() :
 	MdPClientFormalListMtx(nullptr),
 	MdClientLeaveList(nullptr),
 	MdClientLeaveListMtx(nullptr),
-	MdBarrier1(nullptr),
-	MdBarrier2(nullptr),
-	MdBarrier3(nullptr),
-	MdBarrier4(nullptr),
-	MdThreadPool(nullptr)
+	MdThreadPool(nullptr),
+	MdPublicCacheLen(1024 * 200)
 {
-	MdHeartBeatTestInterval = new CTimer;
-	Md_CSocketObj_POOL = new CObjectPool<CSocketObj>(MdConf.MdServiceMaxPeoples);
-	MdPClientFormalList = new std::unordered_map<SOCKET, CSocketObj*>[MdConf.MdDisposeThreadNums];
-	MdPClientFormalListMtx = new std::shared_mutex[MdConf.MdDisposeThreadNums];
-	MdPClientJoinList = new std::unordered_map<SOCKET, CSocketObj*>[MdConf.MdDisposeThreadNums];
-	MdPClientJoinListMtx = new std::mutex[MdConf.MdDisposeThreadNums];
-	MdClientLeaveList = new std::unordered_map<SOCKET, CSocketObj*>[MdConf.MdDisposeThreadNums];
-	MdClientLeaveListMtx = new std::mutex[MdConf.MdDisposeThreadNums];
-	MdBarrier1 = new Barrier;
-	MdBarrier2 = new Barrier;
-	MdBarrier3 = new Barrier;
-	MdBarrier4 = new Barrier;
-	MdThreadPool = new CThreadPool;
+
 }
 
 CServiceNoBlock::~CServiceNoBlock()
@@ -495,10 +455,6 @@ CServiceNoBlock::~CServiceNoBlock()
 	if (MdThreadPool)
 		delete MdThreadPool;
 	MdThreadPool = nullptr;
-
-	if (MdHeartBeatTestInterval)
-		delete MdHeartBeatTestInterval;
-	MdHeartBeatTestInterval = nullptr;
 
 	if (Md_CSocketObj_POOL)
 		delete Md_CSocketObj_POOL;
@@ -527,35 +483,35 @@ CServiceNoBlock::~CServiceNoBlock()
 	if (MdClientLeaveListMtx)
 		delete[] MdClientLeaveListMtx;
 	MdClientLeaveListMtx = nullptr;
+}
 
-	if (MdBarrier1)
-		delete MdBarrier1;
-	MdBarrier1 = nullptr;
-
-	if (MdBarrier2)
-		delete MdBarrier2;
-	MdBarrier2 = nullptr;
-
-	if (MdBarrier3)
-		delete MdBarrier3;
-	MdBarrier3 = nullptr;
-
-	if (MdBarrier4)
-		delete MdBarrier4;
-	MdBarrier4 = nullptr;
+void CServiceNoBlock::Init()
+{
+	Md_CSocketObj_POOL = new CObjectPool<CSocketObj>(MdConf.MdServiceMaxPeoples);
+	MdPClientFormalList = new std::unordered_map<SOCKET, CSocketObj*>[MdConf.MdDisposeThreadNums];
+	MdPClientFormalListMtx = new std::shared_mutex[MdConf.MdDisposeThreadNums];
+	MdPClientJoinList = new std::unordered_map<SOCKET, CSocketObj*>[MdConf.MdDisposeThreadNums];
+	MdPClientJoinListMtx = new std::mutex[MdConf.MdDisposeThreadNums];
+	MdClientLeaveList = new std::unordered_map<SOCKET, CSocketObj*>[MdConf.MdDisposeThreadNums];
+	MdClientLeaveListMtx = new std::mutex[MdConf.MdDisposeThreadNums];
+	MdThreadPool = new CThreadPool;
+	for (int i = 0; i < MdConf.MdDisposeThreadNums; ++i)
+		MdPublicCache.push_back(new char[MdPublicCacheLen]);
 }
 
 bool CServiceNoBlock::Mf_NoBlock_Start(ServiceConf Conf)
 {
 	MdConf = Conf;
+	Init();
+
 	if (!Mf_Init_ListenSock())
 		return false;
 
 	// 处理线程同步
-	MdBarrier1->MfInit(MdConf.MdDisposeThreadNums + 2 + 1);	// 处理线程数量 + send和recv线程 + recv线程本身
-	MdBarrier2->MfInit(2);									// accept + recv两条线程
-	MdBarrier3->MfInit(MdConf.MdDisposeThreadNums + 1);		// 处理线程数量 + recv线程
-	MdBarrier4->MfInit(MdConf.MdDisposeThreadNums + 1);		// 处理线程数量 + send线程
+	MdBarrier1.MfInit(MdConf.MdDisposeThreadNums + 2 + 1);	// 处理线程数量 + send和recv线程 + recv线程本身
+	MdBarrier2.MfInit(2);									// accept + recv两条线程
+	MdBarrier3.MfInit(MdConf.MdDisposeThreadNums + 1);		// 处理线程数量 + recv线程
+	MdBarrier4.MfInit(MdConf.MdDisposeThreadNums + 1);		// 处理线程数量 + send线程
 
 	// 启动各个线程
 	MdThreadPool->MfStart(1 + MdConf.MdDisposeThreadNums + 1 + 1);
@@ -630,7 +586,7 @@ void CServiceNoBlock::Mf_NoBlock_AcceptThread()
 	int				currPeoples = 0;			// 当前已连接人数
 
 	// 等待其他所有线程
-	MdBarrier1->MfWait();
+	MdBarrier1.MfWait();
 
 	// 主循环，每次循环接收一个连接
 	while (!MdThreadPool->MfIsStop())
@@ -696,14 +652,14 @@ void CServiceNoBlock::Mf_NoBlock_AcceptThread()
 	close(MdListenSock);
 #endif // WIN32
 
-	MdBarrier2->MfWait();
+	MdBarrier2.MfWait();
 }
 
 void CServiceNoBlock::Mf_NoBlock_RecvThread()
 {
 	std::thread::id threadid = std::this_thread::get_id();
 
-	MdBarrier1->MfWait();
+	MdBarrier1.MfWait();
 
 	int ret = 0;
 
@@ -730,7 +686,7 @@ void CServiceNoBlock::Mf_NoBlock_RecvThread()
 	}
 
 	// 主循环结束后，首先等待accept线程的结束以及发来的通知
-	MdBarrier2->MfWait();
+	MdBarrier2.MfWait();
 
 	// 然后对所有套接字最后一次接收
 	for (int i = 0; i < MdConf.MdDisposeThreadNums; ++i)
@@ -742,7 +698,7 @@ void CServiceNoBlock::Mf_NoBlock_RecvThread()
 
 
 	// 接下来通知所有dispose线程
-	MdBarrier3->MfWait();
+	MdBarrier3.MfWait();
 }
 
 void CServiceNoBlock::Mf_NoBlock_DisposeThread(int SeqNumber)
@@ -750,7 +706,7 @@ void CServiceNoBlock::Mf_NoBlock_DisposeThread(int SeqNumber)
 	std::thread::id threadid = std::this_thread::get_id();
 	CTimer time;
 
-	MdBarrier1->MfWait();
+	MdBarrier1.MfWait();
 
 	// 主循环
 	while (!MdThreadPool->MfIsStop())
@@ -767,13 +723,13 @@ void CServiceNoBlock::Mf_NoBlock_DisposeThread(int SeqNumber)
 			std::shared_lock<std::shared_mutex> ReadLock(MdPClientFormalListMtx[SeqNumber]);
 			for (auto it : MdPClientFormalList[SeqNumber])
 			{
-				while (it.second->MfHasMsg())
+				while (it.second->MfPopFrontMsg(MdPublicCache[SeqNumber], MdPublicCacheLen))
 				{
-					if (-1 == ((CNetMsgHead*)it.second->MfGetRecvBufP())->MdCmd)	// 当该包的该字段为-1时，代表心跳
+					if (-1 == ((CNetMsgHead*)MdPublicCache[SeqNumber])->MdCmd)	// 当该包的该字段为-1时，代表心跳
 						it.second->MfHeartBeatUpDate();		// 更新心跳计时
 					else
 						MfVNetMsgDisposeFun(it.first, it.second, (CNetMsgHead*)it.second->MfGetRecvBufP(), threadid);
-					it.second->MfPopFrontMsg();
+					;
 				}
 			}
 		}
@@ -781,26 +737,25 @@ void CServiceNoBlock::Mf_NoBlock_DisposeThread(int SeqNumber)
 	}
 
 	// 主循环结束后，所有处理线程都等待recv线程发来的通知
-	MdBarrier3->MfWait();
+	MdBarrier3.MfWait();
 
 	// 对所有套接字进行最后一次处理
 	for (auto it : MdPClientFormalList[SeqNumber])
 	{
-		while (it.second->MfHasMsg())
+		while (it.second->MfPopFrontMsg(MdPublicCache[SeqNumber], MdPublicCacheLen))
 		{
 			MfVNetMsgDisposeFun(it.first, it.second, (CNetMsgHead*)it.second->MfGetRecvBufP(), threadid);
-			it.second->MfPopFrontMsg();
 		}
 	}
 
-	MdBarrier4->MfWait();
+	MdBarrier4.MfWait();
 }
 
 void CServiceNoBlock::Mf_NoBlock_SendThread()
 {
 	std::thread::id threadid = std::this_thread::get_id();
 
-	MdBarrier1->MfWait();
+	MdBarrier1.MfWait();
 
 	int ret = 0;
 
@@ -827,7 +782,7 @@ void CServiceNoBlock::Mf_NoBlock_SendThread()
 	}
 
 	// 主循环结束后，等待所有处理线程到达屏障,发送完所有数据，然后关闭所有套接字
-	MdBarrier4->MfWait();
+	MdBarrier4.MfWait();
 
 	// 发送所有数据
 	for (int i = 0; i < MdConf.MdDisposeThreadNums; ++i)
@@ -873,7 +828,7 @@ void CServiceNoBlock::Mf_NoBlock_ClientLeave(std::thread::id threadid, int SeqNu
 	if (lk.try_lock() && WriteLock.try_lock())
 	{
 		// 第一个循环每隔 心跳超时时间的三分之一 检测一次心跳是否超时
-		if (HeartIntervalTime < MdHeartBeatTestInterval->getElapsedSecond())
+		if (HeartIntervalTime < MdHeartBeatTestInterval.getElapsedSecond())
 		{
 			// 遍历当前列表的客户端心跳计时器，超时就放入待离开列表
 			for (auto it : MdPClientFormalList[SeqNumber])
@@ -920,6 +875,8 @@ CServiceEpoll::~CServiceEpoll()
 bool CServiceEpoll::Mf_Epoll_Start(ServiceConf Conf)
 {
 	MdConf = Conf;
+	Init();
+
 	for (int i = 0; i < MdConf.MdDisposeThreadNums; ++i)		// 为各个处理线程建立epoll的描述符
 	{
 		MdEpoll_In_Fd.push_back(epoll_create(MdThreadAvgPeoples));
@@ -937,10 +894,10 @@ bool CServiceEpoll::Mf_Epoll_Start(ServiceConf Conf)
 		return false;
 
 	// 处理线程同步
-	MdBarrier1->MfInit(MdConf.MdDisposeThreadNums + 1 + 1);	// 处理线程数量 + send和recv线程 + recv线程本身
-	MdBarrier2->MfInit(2);								// 在epoll中未被使用
-	MdBarrier3->MfInit(MdConf.MdDisposeThreadNums + 1);		// accept + 处理线程数量
-	MdBarrier4->MfInit(MdConf.MdDisposeThreadNums + 1);		// 处理线程数量 + send线程
+	MdBarrier1.MfInit(MdConf.MdDisposeThreadNums + 1 + 1);	// 处理线程数量 + send和recv线程 + recv线程本身
+	MdBarrier2.MfInit(2);								// 在epoll中未被使用
+	MdBarrier3.MfInit(MdConf.MdDisposeThreadNums + 1);		// accept + 处理线程数量
+	MdBarrier4.MfInit(MdConf.MdDisposeThreadNums + 1);		// 处理线程数量 + send线程
 
 	MdThreadPool->MfStart(1 + MdConf.MdDisposeThreadNums + 1);
 	MdThreadPool->MfEnqueue(std::bind(&CServiceEpoll::Mf_Epoll_SendThread, this));					// 启动发送线程
@@ -969,7 +926,7 @@ void CServiceEpoll::Mf_Epoll_AcceptThread()
 	int				currPeoples = 0;			// 当前已连接人数
 
 	// 等待其他所有线程
-	MdBarrier1->MfWait();
+	MdBarrier1.MfWait();
 
 	// 主循环，每次循环接收一个连接
 	while (!MdThreadPool->MfIsStop())
@@ -1030,7 +987,7 @@ void CServiceEpoll::Mf_Epoll_AcceptThread()
 #else
 	close(MdListenSock);
 #endif // WIN32
-	MdBarrier3->MfWait();
+	MdBarrier3.MfWait();
 }
 
 void CServiceEpoll::Mf_Epoll_RecvAndDisposeThread(int SeqNumber)
@@ -1038,7 +995,7 @@ void CServiceEpoll::Mf_Epoll_RecvAndDisposeThread(int SeqNumber)
 	std::thread::id threadid = std::this_thread::get_id();
 	CTimer time;
 
-	MdBarrier1->MfWait();
+	MdBarrier1.MfWait();
 
 	int Epoll_N_Fds;
 	int ret = 0;
@@ -1081,13 +1038,12 @@ void CServiceEpoll::Mf_Epoll_RecvAndDisposeThread(int SeqNumber)
 			{
 				tmp_fd = MdEpoll_In_Event[SeqNumber][j].data.fd;
 				tmp_obj = MdPClientFormalList[SeqNumber][tmp_fd];
-				while (tmp_obj->MfHasMsg())
+				while (tmp_obj->MfPopFrontMsg(MdPublicCache[SeqNumber], MdPublicCacheLen))
 				{
-					if (-1 == ((CNetMsgHead*)tmp_obj->MfGetRecvBufP())->MdCmd)	// 当该包的该字段为-1时，代表心跳包
+					if (-1 == ((CNetMsgHead*)MdPublicCache[SeqNumber])->MdCmd)	// 当该包的该字段为-1时，代表心跳包
 						tmp_obj->MfHeartBeatUpDate();		// 更新心跳计时
 					else
-						MfVNetMsgDisposeFun(tmp_fd, tmp_obj, (CNetMsgHead*)tmp_obj->MfGetRecvBufP(), threadid);
-					tmp_obj->MfPopFrontMsg();
+						MfVNetMsgDisposeFun(tmp_fd, tmp_obj, (CNetMsgHead*)MdPublicCache[SeqNumber], threadid);
 				}
 			}
 		}
@@ -1095,7 +1051,7 @@ void CServiceEpoll::Mf_Epoll_RecvAndDisposeThread(int SeqNumber)
 	}
 
 	// 主循环结束后，所有处理线程都等待recv线程发来的通知
-	MdBarrier3->MfWait();
+	MdBarrier3.MfWait();
 
 	// 对所有套接字进行最后一次处理
 	std::shared_lock<std::shared_mutex> ReadLock(MdPClientFormalListMtx[SeqNumber]);
@@ -1105,21 +1061,20 @@ void CServiceEpoll::Mf_Epoll_RecvAndDisposeThread(int SeqNumber)
 		tmp_fd = MdEpoll_In_Event[SeqNumber][j].data.fd;
 		tmp_obj = MdPClientFormalList[SeqNumber][tmp_fd];
 		ret = tmp_obj->MfRecv();
-		while (tmp_obj->MfHasMsg())
+		while (tmp_obj->MfPopFrontMsg(MdPublicCache[SeqNumber], MdPublicCacheLen))
 		{
-			MfVNetMsgDisposeFun(tmp_fd, tmp_obj, (CNetMsgHead*)tmp_obj->MfGetRecvBufP(), threadid);
-			tmp_obj->MfPopFrontMsg();
+			MfVNetMsgDisposeFun(tmp_fd, tmp_obj, (CNetMsgHead*)MdPublicCache[SeqNumber], threadid);
 		}
 	}
 
-	MdBarrier4->MfWait();
+	MdBarrier4.MfWait();
 }
 
 void CServiceEpoll::Mf_Epoll_SendThread()
 {
 	std::thread::id threadid = std::this_thread::get_id();
 
-	MdBarrier1->MfWait();
+	MdBarrier1.MfWait();
 
 	int ret = 0;
 
@@ -1147,7 +1102,7 @@ void CServiceEpoll::Mf_Epoll_SendThread()
 	}
 
 	// 主循环结束后，等待所有处理线程到达屏障,发送完所有数据，然后关闭所有套接字
-	MdBarrier4->MfWait();
+	MdBarrier4.MfWait();
 
 	// 发送所有数据
 	for (int i = 0; i < MdConf.MdDisposeThreadNums; ++i)
@@ -1197,7 +1152,7 @@ void CServiceEpoll::Mf_Epoll_ClientLeave(std::thread::id threadid, int SeqNumber
 	if (lk.try_lock() && WriteLock.try_lock())
 	{
 		// 第一个循环每隔 心跳超时时间的三分之一 检测一次心跳是否超时
-		if (HeartIntervalTime < MdHeartBeatTestInterval->getElapsedSecond())
+		if (HeartIntervalTime < MdHeartBeatTestInterval.getElapsedSecond())
 		{
 			// 遍历当前列表的客户端心跳计时器，超时就放入待离开列表
 			for (auto it : MdPClientFormalList[SeqNumber])

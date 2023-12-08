@@ -559,6 +559,7 @@ public:
 	bool RegMsg(std::string LinkName, int MsgId, MsgFunType fun);
 };
 
+typedef std::function<void()> OnCloseFunType;
 struct ServiceConf
 {
 	std::string			Fun;	
@@ -571,10 +572,9 @@ struct ServiceConf
 	int					SecondBufferRecvLen = DEFAULTBUFFERLEN;// 第二缓冲区长度
 	int					RawSocketSendLen = 0;		// socket本身缓冲区长度
 	int					RawSocketRecvLen = 0;		// socket本身缓冲区长度
-	OnCloseFunType		OnCloseFun;
+	OnCloseFunType*		OnCloseFun = nullptr;
 };
 
-typedef std::function<void()> OnCloseFunType;
 class CServiceNoBlock
 {
 protected:

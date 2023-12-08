@@ -424,12 +424,14 @@ private:
 	char				MdIP[20];				// sock对端的地址
 	int					MdPort;					// sock对端的地址
 public:
+	std::unordered_map<std::string, std::string> UserCustomData;		// 自定义数据
+public:
 	CSocketObj(SOCKET sock, int SendBuffLen = DEFAULTBUFFERLEN, int RecvBuffLen = DEFAULTBUFFERLEN);
 	~CSocketObj();
 public:
 	SOCKET	MfGetSock() { return MdSock; }
 
-	char* MfGetRecvBufP()						/*返回接收缓冲区原始指针*/ { return MdPRecvBuffer.MfGetBufferP(); }
+	char*	MfGetRecvBufP()						/*返回接收缓冲区原始指针*/ { return MdPRecvBuffer.MfGetBufferP(); }
 
 	int		MfRecv()							/*为该对象接收数据*/ { return MdPRecvBuffer.MfSocketToBuffer(MdSock); }
 	int		MfSend()							/*为该对象发送数据*/ { return MdPSendBuffer.MfBufferToSocket(MdSock); }
@@ -569,8 +571,10 @@ struct ServiceConf
 	int					SecondBufferRecvLen = DEFAULTBUFFERLEN;// 第二缓冲区长度
 	int					RawSocketSendLen = 0;		// socket本身缓冲区长度
 	int					RawSocketRecvLen = 0;		// socket本身缓冲区长度
+	OnCloseFunType		OnCloseFun;
 };
 
+typedef std::function<void()> OnCloseFunType;
 class CServiceNoBlock
 {
 protected:
@@ -590,6 +594,8 @@ protected:
 	int					MdPublicCacheLen = 0;	// 每条处理线程一个公共缓冲区,处理数据取出时也是trylock,然后把消息写到这里
 	std::vector<char*>	MdPublicCache;			// 这样dispose线程就不会小概率卡住了
 
+	OnCloseFunType* OnCloseFun = nullptr;
+
 protected:			// 用来在服务启动时，等待其他所有线程启动后，再启动Accept线程
 	Barrier MdBarrier1;
 protected:			// 这一组变量，用来在服务结束时，按accept recv dispose send的顺序来结束线程以保证不出错
@@ -603,6 +609,7 @@ public:
 	bool Mf_NoBlock_Start(ServiceConf Conf);		// 启动收发处理线程的非阻塞版本
 	bool Mf_NoBlock_Stop();							// 遍历所有连接
 	void VisitSocketObj(std::function<bool(CSocketObj*)> Fun);
+	void SetOncloseFun(OnCloseFunType* Fun) { OnCloseFun = Fun; }
 protected:
 	bool Mf_Init_ListenSock();		// 初始化套接字
 private:

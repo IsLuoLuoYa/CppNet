@@ -842,6 +842,8 @@ void CServiceNoBlock::Mf_NoBlock_ClientLeave(std::thread::id threadid, int SeqNu
 		{
 			for (auto it = MdClientLeaveList[SeqNumber].begin(); it != MdClientLeaveList[SeqNumber].end(); ++it)
 			{
+				if (OnCloseFun)
+					(*OnCloseFun)();
 				MdPClientFormalList[SeqNumber].erase(it->first);
 				it->second->MfClose();
 				Md_CSocketObj_POOL[SeqNumber]->MfReturnObject(it->second);
@@ -1165,6 +1167,8 @@ void CServiceEpoll::Mf_Epoll_ClientLeave(std::thread::id threadid, int SeqNumber
 		{
 			for (auto it = MdClientLeaveList[SeqNumber].begin(); it != MdClientLeaveList[SeqNumber].end(); ++it)
 			{
+				if (OnCloseFun)
+					(*OnCloseFun)();
 				it->second->MfClose();
 				epoll_ctl(MdEpoll_In_Fd[SeqNumber], EPOLL_CTL_DEL, it->first, nullptr);
 				MdPClientFormalList[SeqNumber].erase(it->first);

@@ -725,8 +725,7 @@ void CServiceNoBlock::Mf_NoBlock_DisposeThread(int SeqNumber)
 					if (-1 == ((CNetMsgHead*)MdPublicCache[SeqNumber])->MdCmd)	// 当该包的该字段为-1时，代表心跳
 						it.second->MfHeartBeatUpDate();		// 更新心跳计时
 					else
-						MfVNetMsgDisposeFun(it.first, it.second, (CNetMsgHead*)it.second->MfGetRecvBufP(), threadid);
-					;
+						MfVNetMsgDisposeFun(it.first, it.second, (CNetMsgHead*)MdPublicCache[SeqNumber], threadid);
 				}
 			}
 		}
@@ -741,7 +740,7 @@ void CServiceNoBlock::Mf_NoBlock_DisposeThread(int SeqNumber)
 	{
 		while (it.second->MfPopFrontMsg(MdPublicCache[SeqNumber], MdPublicCacheLen))
 		{
-			MfVNetMsgDisposeFun(it.first, it.second, (CNetMsgHead*)it.second->MfGetRecvBufP(), threadid);
+			MfVNetMsgDisposeFun(it.first, it.second, (CNetMsgHead*)MdPublicCache[SeqNumber], threadid);
 		}
 	}
 

@@ -471,6 +471,8 @@ public:
 		Msg.Head.MdLen = len + sizeof(CNetMsgHead);
 		Msg.Data = data;
 		return MdPSendBuffer.MfSendMsg(&Msg);
+
+
 	}
 };
 

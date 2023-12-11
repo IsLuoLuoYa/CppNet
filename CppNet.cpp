@@ -598,7 +598,7 @@ void CServiceNoBlock::Mf_NoBlock_AcceptThread()
 	while (!MdThreadPool->MfIsStop())
 	{
 		currPeoples = 0;
-		for (int i = 0; i <= MdConf.MdDisposeThreadNums; ++i)	// 计算当前已连接人数
+		for (int i = 0; i < MdConf.MdDisposeThreadNums; ++i)	// 计算当前已连接人数
 			currPeoples += (int)MdPClientFormalList[i].size();
 		if (currPeoples > MdConf.MdServiceMaxPeoples)	// 大于上限服务人数，就不accpet，等待然后开始下一轮循环
 		{
@@ -635,7 +635,7 @@ void CServiceNoBlock::Mf_NoBlock_AcceptThread()
 				setsockopt(sock, SOL_SOCKET, SO_SNDBUF, (const char*)&(MdConf.RawSocketSendLen), sizeof(int));
 
 			minPeoples = INT32_MAX;
-			for (int i = 0; i <= MdConf.MdDisposeThreadNums; ++i)	// 找出人数最少的
+			for (int i = 0; i < MdConf.MdDisposeThreadNums; ++i)	// 找出人数最少的
 			{
 				if (minPeoples > (int)MdPClientFormalList[i].size())
 				{
@@ -948,7 +948,7 @@ void CServiceEpoll::Mf_Epoll_AcceptThread()
 	while (!MdThreadPool->MfIsStop())
 	{
 		currPeoples = 0;
-		for (int i = 0; i <= MdConf.MdDisposeThreadNums; ++i)	// 计算当前已连接人数
+		for (int i = 0; i < MdConf.MdDisposeThreadNums; ++i)	// 计算当前已连接人数
 			currPeoples += (int)MdPClientFormalList[i].size();
 		if (currPeoples > MdConf.MdServiceMaxPeoples)	// 大于上限服务人数，就不accpet，等待然后开始下一轮循环
 		{
@@ -981,7 +981,7 @@ void CServiceEpoll::Mf_Epoll_AcceptThread()
 				setsockopt(sock, SOL_SOCKET, SO_SNDBUF, (const char*)&(MdConf.RawSocketSendLen), sizeof(int));
 
 			minPeoples = INT32_MAX;
-			for (int i = 0; i <= MdConf.MdDisposeThreadNums; ++i)			// 找出人数最少的
+			for (int i = 0; i < MdConf.MdDisposeThreadNums; ++i)			// 找出人数最少的
 			{
 				if (minPeoples > (int)MdPClientFormalList[i].size())
 				{

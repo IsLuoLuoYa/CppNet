@@ -543,7 +543,6 @@ private:
 	int	MdPublicCacheLen;			// 每条处理线程一个公共缓冲区,处理数据取出时也是trylock,然后把消息写到这里
 	char* MdPublicCache;			// 这样dispose线程就不会小概率卡住了
 private:
-	bool MfSendData(std::string str, const char* data, int len);	// 发送数据，插入缓冲区
 public:
 	CClientLinkManage(int HeartSendInterval = 3);
 	~CClientLinkManage();
@@ -552,8 +551,6 @@ public:
 	bool MfCreateAddLink(ClientConf Conf);		// 如果需要建立新的连接，就new一个ClientLink，同时记录连接的目标，然后加入列表是，设置client可用
 	void MfCloseLink(std::string Linkname);							// 关闭某个连接
 	bool MfSendMsg(std::string name, int MsgId, const char* data, int len);
-private:
-	const char* MfGetRecvBufferP(std::string name);					// 返回接收缓冲区的指针，可以直接读这里的数据
 public:
 	bool MfLinkIsSurvive(std::string name);							// 某个服务是否活着
 private:

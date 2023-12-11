@@ -308,29 +308,15 @@ void CClientLinkManage::MfCloseLink(std::string Linkname)
 	}
 }
 
-bool CClientLinkManage::MfSendData(std::string name, const char* data, int len)
-{
-	auto it = MdClientLinkList.find(name);
-	if (it == MdClientLinkList.end())
-		return false;
-	return it->second->MfDataToBuffer(data, len);
-}
-
 bool CClientLinkManage::MfSendMsg(std::string name, int MsgId, const char* data, int len)
 {
+	std::unique_lock<std::shared_mutex> lk(MdClientLinkListMtx);
 	auto it = MdClientLinkList.find(name);
 	if (it == MdClientLinkList.end())
 		return false;
 	return it->second->MfSendMsg(MsgId, data, len);
 }
 
-const char* CClientLinkManage::MfGetRecvBufferP(std::string name)
-{
-	auto it = MdClientLinkList.find(name);
-	if (it == MdClientLinkList.end())
-		return nullptr;
-	return it->second->MfGetRecvBufferP();
-}
 bool CClientLinkManage::MfLinkIsSurvive(std::string name)
 {
 	std::shared_lock<std::shared_mutex> lk(MdClientLinkListMtx);

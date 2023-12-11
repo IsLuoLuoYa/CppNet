@@ -407,7 +407,11 @@ void CClientLinkManage::MfRecvThread()
 
 bool CClientLinkManage::RegMsg(std::string LinkName, int MsgId, MsgFunType fun)
 {
-	return MdClientLinkList[LinkName]->RegMsg(MsgId, fun);
+	std::shared_lock<std::shared_mutex> lk(MdClientLinkListMtx);
+	auto Link = MdClientLinkList.find(LinkName);
+	if (Link == MdClientLinkList.end())
+		return false;
+	return Link->second->RegMsg(MsgId, fun);
 }
 
 CServiceNoBlock::CServiceNoBlock() :

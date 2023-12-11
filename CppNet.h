@@ -423,6 +423,7 @@ private:
 	CTimer				MdHeartBeatTimer;		// 心跳计时器
 	char				MdIP[20];				// sock对端的地址
 	int					MdPort;					// sock对端的地址
+	int64_t				MdUid = 0;				// server用的uid
 public:
 	std::unordered_map<std::string, std::string> UserCustomData;		// 自定义数据
 public:
@@ -435,6 +436,9 @@ public:
 
 	int		MfRecv()							/*为该对象接收数据*/ { return MdPRecvBuffer.MfSocketToBuffer(MdSock); }
 	int		MfSend()							/*为该对象发送数据*/ { return MdPSendBuffer.MfBufferToSocket(MdSock); }
+
+	int64_t MfGetUid()							{ return MdUid; }
+	void	MfSetUid(int64_t Uid)				{ MdUid = Uid; }
 
 	void	MfSetPeerAddr(sockaddr_in* addr)	/*设置对端IP和端口*/ { MdPort = ntohs(addr->sin_port); strcpy(MdIP, inet_ntoa(addr->sin_addr)); }
 
@@ -586,9 +590,12 @@ protected:
 	std::mutex*									MdPClientJoinListMtx;		// 非正式客户端列表的锁
 	std::unordered_map<SOCKET, CSocketObj*>*	MdPClientFormalList;		// 正式的客户端列表，一个线程对应一个map[],存储当前线程的服务对象,map[threadid]找到对应map，map[threadid][socket]找出socket对应的数据
 	std::shared_mutex*							MdPClientFormalListMtx;		// 为一MdPEachDisoposeThreadOfServiceObj[]添加sock时，应MdEachThreadOfMtx[].lock
+	std::unordered_map<int64_t, CSocketObj*>*	MdPClientFormalList_LinkUid;// 每个CSocketObj用一个自增的uid来索引以下
+	int*										MdLinkUidCount;				// 自增的uid
 	std::unordered_map<SOCKET, CSocketObj*>*	MdClientLeaveList;			// 等待从正式列表中移除的缓冲列表
 	std::mutex*									MdClientLeaveListMtx;		// 移除列表的锁
 	CThreadPool*								MdThreadPool;
+	
 	std::unordered_map<int, MsgFunType>			MsgDealFuncMap;				// 注册的消息列表
 
 	int					MdPublicCacheLen = 0;	// 每条处理线程一个公共缓冲区,处理数据取出时也是trylock,然后把消息写到这里
@@ -609,6 +616,7 @@ public:
 	bool Mf_NoBlock_Start(ServiceConf Conf);		// 启动收发处理线程的非阻塞版本
 	bool Mf_NoBlock_Stop();							// 遍历所有连接
 	void VisitSocketObj(std::function<bool(CSocketObj*)> Fun);
+	bool Mf_SendMsgByUid(int64_t Uid, int MsgId, char* Data, int len);
 	void SetOncloseFun(OnCloseFunType* Fun) { OnCloseFun = Fun; }
 protected:
 	bool Mf_Init_ListenSock();		// 初始化套接字

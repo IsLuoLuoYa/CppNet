@@ -407,16 +407,15 @@ void CClientLinkManage::MfRecvThread()
 
 bool CClientLinkManage::RegMsg(std::string LinkName, int MsgId, MsgFunType fun)
 {
-	auto it = MdClientLinkList.find(LinkName);
-	if (it == MdClientLinkList.end())
-		return false;
-	return it->second->RegMsg(MsgId, fun);
+	return MdClientLinkList[LinkName]->RegMsg(MsgId, fun);
 }
 
 CServiceNoBlock::CServiceNoBlock() :
 	MdPClientJoinList(nullptr),
 	MdPClientJoinListMtx(nullptr),
 	MdPClientFormalList(nullptr),
+	MdPClientFormalList_LinkUid(nullptr),
+	MdLinkUidCount(nullptr),
 	MdPClientFormalListMtx(nullptr),
 	MdClientLeaveList(nullptr),
 	MdClientLeaveListMtx(nullptr),
@@ -435,6 +434,14 @@ CServiceNoBlock::~CServiceNoBlock()
 	if (MdPClientFormalList)
 		delete[] MdPClientFormalList;
 	MdPClientFormalList = nullptr;
+
+	if (MdPClientFormalList_LinkUid)
+		delete[] MdPClientFormalList_LinkUid;
+	MdPClientFormalList_LinkUid = nullptr;
+
+	if (MdLinkUidCount)
+		delete[] MdLinkUidCount;
+	MdLinkUidCount = nullptr;
 
 	if (MdPClientFormalListMtx)
 		delete[] MdPClientFormalListMtx;
@@ -466,6 +473,8 @@ void CServiceNoBlock::Init()
 	for (int i = 0; i < MdConf.MdDisposeThreadNums; ++i)
 		Md_CSocketObj_POOL.push_back(new CObjectPool<CSocketObj>(MdConf.MdServiceMaxPeoples / MdConf.MdDisposeThreadNums + 10));
 	MdPClientFormalList = new std::unordered_map<SOCKET, CSocketObj*>[MdConf.MdDisposeThreadNums];
+	MdPClientFormalList_LinkUid = new std::unordered_map<int64_t, CSocketObj*>[MdConf.MdDisposeThreadNums];
+	MdLinkUidCount = new int[MdConf.MdDisposeThreadNums] {};
 	MdPClientFormalListMtx = new std::shared_mutex[MdConf.MdDisposeThreadNums];
 	MdPClientJoinList = new std::unordered_map<SOCKET, CSocketObj*>[MdConf.MdDisposeThreadNums];
 	MdPClientJoinListMtx = new std::mutex[MdConf.MdDisposeThreadNums];
@@ -524,6 +533,16 @@ void CServiceNoBlock::VisitSocketObj(std::function<bool(CSocketObj*)> Fun)
 		if (Isbreak)
 			break;
 	}
+}
+
+bool CServiceNoBlock::Mf_SendMsgByUid(int64_t Uid, int MsgId, char* Data, int len)
+{
+	int ThreadNums = Uid >> 32;
+	std::shared_lock<std::shared_mutex> ReadLock(MdPClientFormalListMtx[ThreadNums]);		// 锁住防止CSocketObj被移除列表析构
+	auto SocketObj = MdPClientFormalList_LinkUid[ThreadNums].find(Uid);
+	if (SocketObj == MdPClientFormalList_LinkUid[ThreadNums].end())
+		return false;
+	SocketObj->second->MfSendMsg(MsgId, Data, len);
 }
 
 bool CServiceNoBlock::Mf_Init_ListenSock()
@@ -637,6 +656,12 @@ void CServiceNoBlock::Mf_NoBlock_AcceptThread()
 			CSocketObj* TempSocketObj = Md_CSocketObj_POOL[minId]->MfApplyObject(sock, MdConf.SecondBufferSendLen, MdConf.SecondBufferRecvLen);
 			TempSocketObj->MfSetPeerAddr(&addr);
 			TempSocketObj->MfSetThreadIndex(minId);
+			MdLinkUidCount[minId]++;
+			if (MdLinkUidCount[minId] < 0)
+				MdLinkUidCount[minId] = 1;
+			int64_t Uid = MdLinkUidCount[minId] << 32;
+			Uid |= MdLinkUidCount[minId];
+			TempSocketObj->MfSetUid(Uid);
 			std::lock_guard<std::mutex> lk(MdPClientJoinListMtx[minId]);								// 对应的线程map上锁
 			MdPClientJoinList[minId].insert(std::pair<SOCKET, CSocketObj*>(sock, TempSocketObj));		// 添加该连接到加入缓冲区
 		}
@@ -725,7 +750,8 @@ void CServiceNoBlock::Mf_NoBlock_DisposeThread(int SeqNumber)
 					if (-1 == ((CNetMsgHead*)MdPublicCache[SeqNumber])->MdCmd)	// 当该包的该字段为-1时，代表心跳
 						it.second->MfHeartBeatUpDate();		// 更新心跳计时
 					else
-						MfVNetMsgDisposeFun(it.first, it.second, (CNetMsgHead*)MdPublicCache[SeqNumber], threadid);
+						MfVNetMsgDisposeFun(it.first, it.second, (CNetMsgHead*)it.second->MfGetRecvBufP(), threadid);
+					;
 				}
 			}
 		}
@@ -740,7 +766,7 @@ void CServiceNoBlock::Mf_NoBlock_DisposeThread(int SeqNumber)
 	{
 		while (it.second->MfPopFrontMsg(MdPublicCache[SeqNumber], MdPublicCacheLen))
 		{
-			MfVNetMsgDisposeFun(it.first, it.second, (CNetMsgHead*)MdPublicCache[SeqNumber], threadid);
+			MfVNetMsgDisposeFun(it.first, it.second, (CNetMsgHead*)it.second->MfGetRecvBufP(), threadid);
 		}
 	}
 
@@ -808,7 +834,8 @@ void CServiceNoBlock::Mf_NoBlock_ClientJoin(std::thread::id threadid, int SeqNum
 		std::lock_guard<std::shared_mutex> WriteLock(MdPClientFormalListMtx[SeqNumber]);
 		for (auto it = MdPClientJoinList[SeqNumber].begin(); it != MdPClientJoinList[SeqNumber].end(); ++it)
 		{
-			MdPClientFormalList[SeqNumber].insert(std::pair<SOCKET, CSocketObj*>(it->first, it->second));
+			MdPClientFormalList_LinkUid[SeqNumber][it->first] = it->second;
+			MdPClientFormalList[SeqNumber][it->first] = it->second;
 		}
 		MdPClientJoinList[SeqNumber].clear();
 	}
@@ -845,6 +872,7 @@ void CServiceNoBlock::Mf_NoBlock_ClientLeave(std::thread::id threadid, int SeqNu
 				if (OnCloseFun)
 					(*OnCloseFun)();
 				MdPClientFormalList[SeqNumber].erase(it->first);
+				MdPClientFormalList_LinkUid[SeqNumber].erase(it->second->MfGetUid());
 				it->second->MfClose();
 				Md_CSocketObj_POOL[SeqNumber]->MfReturnObject(it->second);
 			}
@@ -974,6 +1002,12 @@ void CServiceEpoll::Mf_Epoll_AcceptThread()
 			CSocketObj* TempSocketObj = Md_CSocketObj_POOL[minId]->MfApplyObject(sock, MdConf.SecondBufferSendLen, MdConf.SecondBufferRecvLen);
 			TempSocketObj->MfSetPeerAddr(&addr);
 			TempSocketObj->MfSetThreadIndex(minId);
+			MdLinkUidCount[minId]++;
+			if (MdLinkUidCount[minId] < 0)
+				MdLinkUidCount[minId] = 1;
+			int64_t Uid = MdLinkUidCount[minId] << 32;
+			Uid |= MdLinkUidCount[minId];
+			TempSocketObj->MfSetUid(Uid);
 			std::lock_guard<std::mutex> lk(MdPClientJoinListMtx[minId]);								// 对应的线程map上锁
 			MdPClientJoinList[minId].insert(std::pair<SOCKET, CSocketObj*>(sock, TempSocketObj));		// 添加该连接到加入缓冲区
 		}
@@ -1132,6 +1166,7 @@ void CServiceEpoll::Mf_Epoll_ClientJoin(std::thread::id threadid, int SeqNumber)
 		std::lock_guard<std::shared_mutex> WriteLock(MdPClientFormalListMtx[SeqNumber]);
 		for (auto it = MdPClientJoinList[SeqNumber].begin(); it != MdPClientJoinList[SeqNumber].end(); ++it)
 		{
+			MdPClientFormalList_LinkUid[SeqNumber][it->first] = it->second;
 			MdPClientFormalList[SeqNumber].insert(std::pair<SOCKET, CSocketObj*>(it->first, it->second));
 			EvIn.data.fd = it->first;
 			epoll_ctl(MdEpoll_In_Fd[SeqNumber], EPOLL_CTL_ADD, it->first, &EvIn);		// 设置套接字到收线程的Epoll
@@ -1172,6 +1207,7 @@ void CServiceEpoll::Mf_Epoll_ClientLeave(std::thread::id threadid, int SeqNumber
 				it->second->MfClose();
 				epoll_ctl(MdEpoll_In_Fd[SeqNumber], EPOLL_CTL_DEL, it->first, nullptr);
 				MdPClientFormalList[SeqNumber].erase(it->first);
+				MdPClientFormalList_LinkUid[SeqNumber].erase(it->second->MfGetUid());
 				Md_CSocketObj_POOL[SeqNumber]->MfReturnObject(it->second);
 			}
 			MdClientLeaveList[SeqNumber].clear();

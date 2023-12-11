@@ -504,6 +504,7 @@ bool CServiceNoBlock::Mf_NoBlock_Start(ServiceConf Conf)
 bool CServiceNoBlock::Mf_NoBlock_Stop()
 {
 	MdThreadPool->MfStop();
+	return true;
 }
 
 void CServiceNoBlock::VisitSocketObj(std::function<bool(CSocketObj*)> Fun)

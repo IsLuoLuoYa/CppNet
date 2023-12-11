@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 // 记得-lpthread;
 // vs远程调试：属性-> 链接器-> 所有选项 -> 附加依赖项-lpthread;
@@ -503,7 +503,7 @@ public:
 	bool MfDataToBuffer(const char* data, int len)		/*供调用者插入数据，插入数据到发送缓冲区*/ { return MdClientSock->MfDataToBuffer(data, len); }
 	bool MfSendMsg(int MsgId, const char* data, int len)/*发消息*/ { return MdClientSock->MfSendMsg(MsgId, data, len); }
 	const char* MfGetRecvBufferP()						/*供使用者处理数据，取得接收缓冲区原始指针*/ { return MdClientSock->MfGetRecvBufP(); }
-	bool MfPopFrontMsg(char* Buff, int BuffLen)								/*供使用者处理数据，第一条信息移出缓冲区*/ { MdClientSock->MfPopFrontMsg(Buff, BuffLen); }
+	bool MfPopFrontMsg(char* Buff, int BuffLen)								/*供使用者处理数据，第一条信息移出缓冲区*/ { return MdClientSock->MfPopFrontMsg(Buff, BuffLen); }
 
 public:
 	bool RegMsg(int MsgId, MsgFunType fun)

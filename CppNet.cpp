@@ -400,6 +400,15 @@ bool CClientLinkManage::RegMsg(std::string LinkName, int MsgId, MsgFunType fun)
 	return Link->second->RegMsg(MsgId, fun);
 }
 
+void CClientLinkManage::RegDeafultMsg(std::string LinkName, MsgFunType fun)
+{
+	std::shared_lock<std::shared_mutex> lk(MdClientLinkListMtx);
+	auto Link = MdClientLinkList.find(LinkName);
+	if (Link == MdClientLinkList.end())
+		return;
+	Link->second->RegDeafultMsg(fun);
+}
+
 CServiceNoBlock::CServiceNoBlock() :
 	MdPClientJoinList(nullptr),
 	MdPClientJoinListMtx(nullptr),
@@ -528,6 +537,8 @@ void CServiceNoBlock::VisitSocketObj(std::function<bool(CSocketObj*)> Fun)
 bool CServiceNoBlock::Mf_SendMsgByUid(int64_t Uid, int MsgId, char* Data, int len)
 {
 	int ThreadNums = Uid >> 32;
+	if (ThreadNums >= MdConf.MdDisposeThreadNums)
+		return false;
 	std::shared_lock<std::shared_mutex> ReadLock(MdPClientFormalListMtx[ThreadNums]);		// 锁住防止CSocketObj被移除列表析构
 	auto SocketObj = MdPClientFormalList_LinkUid[ThreadNums].find(Uid);
 	if (SocketObj == MdPClientFormalList_LinkUid[ThreadNums].end())

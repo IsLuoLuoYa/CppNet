@@ -494,6 +494,7 @@ private:
 	CSocketObj*				MdClientSock = 0;	// 客户连接对象
 	std::atomic<int>		MdIsConnect = 0;	// 表示是否连接成功	
 	std::unordered_map<int, MsgFunType> MsgDealFuncMap;
+	MsgFunType							DeafultMsgDeal;
 private:
 public:
 	CClientLink(std::string s) {};
@@ -519,14 +520,22 @@ public:
 		MsgDealFuncMap[MsgId] = fun;
 		return true;
 	}
+	void RegDeafultMsg(MsgFunType fun)
+	{
+		DeafultMsgDeal = fun;
+	}
 
 	virtual void MfVNetMsgDisposeFun(SOCKET sock, CSocketObj* Ser, CNetMsgHead* msg, std::thread::id& threadid)
 	{
 		auto Fun = MsgDealFuncMap.find(msg->MdCmd);
 		if (Fun == MsgDealFuncMap.end())
+		{
+			if (DeafultMsgDeal.operator bool())
+				DeafultMsgDeal(Ser, msg, msg->MdLen);												// 注意默认消息是带包头传递的
 			return;
+		}
 
-		Fun->second(Ser, ((char*)msg) + sizeof(CNetMsgHead), msg->MdLen - sizeof(CNetMsgHead));
+		Fun->second(Ser, ((char*)msg) + sizeof(CNetMsgHead), msg->MdLen - sizeof(CNetMsgHead));		// 正常处理不带包头
 	}
 };
 
@@ -560,6 +569,7 @@ private:
 	void MfRecvThread();											// 接收线程，循环调用recv，收发线程根据是否可用标志确定行为
 public:
 	bool RegMsg(std::string LinkName, int MsgId, MsgFunType fun);
+	void RegDeafultMsg(std::string LinkName, MsgFunType fun);
 };
 
 typedef std::function<void()> OnCloseFunType;
@@ -596,6 +606,7 @@ protected:
 	CThreadPool*								MdThreadPool;
 	
 	std::unordered_map<int, MsgFunType>			MsgDealFuncMap;				// 注册的消息列表
+	MsgFunType									DeafultMsgDeal;
 
 	int					MdPublicCacheLen = 0;	// 每条处理线程一个公共缓冲区,处理数据取出时也是trylock,然后把消息写到这里
 	std::vector<char*>	MdPublicCache;			// 这样dispose线程就不会小概率卡住了
@@ -634,14 +645,22 @@ public:
 		MsgDealFuncMap[MsgId] = fun;
 		return true;
 	}
+	void RegDeafultMsg(MsgFunType fun)
+	{
+		DeafultMsgDeal = fun;
+	}
 
 	virtual void MfVNetMsgDisposeFun(SOCKET sock, CSocketObj* cli, CNetMsgHead* msg, std::thread::id& threadid)
 	{
 		auto Fun = MsgDealFuncMap.find(msg->MdCmd);
 		if (Fun == MsgDealFuncMap.end())
+		{
+			if (DeafultMsgDeal.operator bool())
+				DeafultMsgDeal(cli, msg, msg->MdLen);												// 注意默认消息是带包头传递的
 			return;
+		}
 
-		Fun->second(cli, ((char*)msg) + sizeof(CNetMsgHead), msg->MdLen - sizeof(CNetMsgHead));
+		Fun->second(cli, ((char*)msg) + sizeof(CNetMsgHead), msg->MdLen - sizeof(CNetMsgHead));		// 正常处理不带包头
 	}
 };
 

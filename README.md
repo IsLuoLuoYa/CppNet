@@ -7,6 +7,8 @@ linux需要链接pthread
 
 详细说明参考：https://blog.csdn.net/qq_43082206/article/details/110383165 在原始代码经过一些修改，主体部分未修改
 
+v2分支是一个去掉虚函数调用的版本, 最近看了点c++20想着用概念把虚函数放到编译期解决, 但是改了才发现当时用虚函数是想着复用代码，所以v2版本现在是重复代码来避免虚函数
+
 # 目前为止的缺点
 
 虽然server的SocketObj对象用了对象池，但是SocketObj对象里还有两个SecondBuffer,这两个buffer本身的空间还是用new的，看起来不是那么好

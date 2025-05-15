@@ -648,13 +648,7 @@ private:
 	void Mf_NoBlock_ClientJoin(std::thread::id threadid, int SeqNumber);	// 客户端加入正式列表
 	void Mf_NoBlock_ClientLeave(std::thread::id threadid, int SeqNumber);	// 客户端移除正式列表
 public:
-	bool RegMsg(int MsgId, MsgFunType fun)
-	{
-		if (MsgDealFuncMap.find(MsgId) != MsgDealFuncMap.end())
-			return false;
-		MsgDealFuncMap[MsgId] = fun;
-		return true;
-	}
+	bool RegMsg(int MsgId, MsgFunType fun);
 
 	void MfVNetMsgDisposeFun(SOCKET sock, CSocketObj* cli, CNetMsgHead* msg, std::thread::id& threadid);
 };
@@ -703,6 +697,9 @@ public:
 	void Init();
 	bool Mf_Epoll_Start(ServiceConf Conf);
 	void Mf_Epoll_Stop();
+	void VisitSocketObj(std::function<bool(CSocketObj*)> Fun);
+	bool Mf_SendMsgByUid(int64_t Uid, int MsgId, char* Data, int len);
+	void SetOncloseFun(OnCloseFunType* Fun) { OnCloseFun = Fun; }
 protected:
 	bool Mf_Init_ListenSock();		// 初始化套接字
 private:
@@ -712,6 +709,8 @@ private:
 	void Mf_Epoll_ClientJoin(std::thread::id threadid, int SeqNumber);	// 客户端加入正式列表
 	void Mf_Epoll_ClientLeave(std::thread::id threadid, int SeqNumber);	// 客户端移除正式列表
 
+public:
+	bool RegMsg(int MsgId, MsgFunType fun);
 	void MfVNetMsgDisposeFun(SOCKET sock, CSocketObj* cli, CNetMsgHead* msg, std::thread::id& threadid);
 };
 

@@ -874,6 +874,14 @@ void CServiceNoBlock::Mf_NoBlock_ClientLeave(std::thread::id threadid, int SeqNu
 	}
 }
 
+bool CServiceNoBlock::RegMsg(int MsgId, MsgFunType fun)
+{
+	if (MsgDealFuncMap.find(MsgId) != MsgDealFuncMap.end())
+		return false;
+	MsgDealFuncMap[MsgId] = fun;
+	return true;
+}
+
 void CServiceNoBlock::MfVNetMsgDisposeFun(SOCKET sock, CSocketObj* cli, CNetMsgHead* msg, std::thread::id& threadid)
 {
 	auto Fun = MsgDealFuncMap.find(msg->MdCmd);
@@ -1012,6 +1020,37 @@ bool CServiceEpoll::Mf_Epoll_Start(ServiceConf Conf)
 void CServiceEpoll::Mf_Epoll_Stop()
 {
 	MdThreadPool->MfStop();
+}
+
+void CServiceEpoll::VisitSocketObj(std::function<bool(CSocketObj*)> Fun)
+{
+	for (int i = 0; i < MdConf.MdDisposeThreadNums; ++i)
+	{
+		bool Isbreak = false;
+		std::shared_lock<std::shared_mutex> ReadLock(MdPClientFormalListMtx[i]);
+		for (auto it = MdPClientFormalList[i].begin(); it != MdPClientFormalList[i].end(); ++it)
+		{
+			if (!Fun(it->second))
+			{
+				Isbreak = true;
+				break;
+			}
+		}
+		if (Isbreak)
+			break;
+	}
+}
+
+bool CServiceEpoll::Mf_SendMsgByUid(int64_t Uid, int MsgId, char* Data, int len)
+{
+	int ThreadNums = Uid >> 32;
+	if (ThreadNums >= MdConf.MdDisposeThreadNums)
+		return false;
+	std::shared_lock<std::shared_mutex> ReadLock(MdPClientFormalListMtx[ThreadNums]);		// 锁住防止CSocketObj被移除列表析构
+	auto SocketObj = MdPClientFormalList_LinkUid[ThreadNums].find(Uid);
+	if (SocketObj == MdPClientFormalList_LinkUid[ThreadNums].end())
+		return false;
+	SocketObj->second->MfSendMsg(MsgId, Data, len);
 }
 
 bool CServiceEpoll::Mf_Init_ListenSock()
@@ -1328,6 +1367,14 @@ void CServiceEpoll::Mf_Epoll_ClientLeave(std::thread::id threadid, int SeqNumber
 			MdClientLeaveList[SeqNumber].clear();
 		}
 	}
+}
+
+bool CServiceEpoll::RegMsg(int MsgId, MsgFunType fun)
+{
+	if (MsgDealFuncMap.find(MsgId) != MsgDealFuncMap.end())
+		return false;
+	MsgDealFuncMap[MsgId] = fun;
+	return true;
 }
 
 void CServiceEpoll::MfVNetMsgDisposeFun(SOCKET sock, CSocketObj* cli, CNetMsgHead* msg, std::thread::id& threadid)

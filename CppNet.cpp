@@ -174,7 +174,7 @@ CSocketObj::~CSocketObj()
 
 int CClientLink::MfConnect(const char* ip, unsigned short port)
 {
-	auto Id = std::this_thread::get_id();
+	//auto Id = std::this_thread::get_id();
 	int ret = -1;
 	sockaddr_in addr{};
 	addr.sin_family = AF_INET;
@@ -285,7 +285,7 @@ bool CClientLinkManage::MfCreateAddLink(ClientConf Conf)
 			return false;
 	}
 
-	CClientLink* temp = new	CClientLink(Conf.Linkname);
+	CClientLink* temp = new	CClientLink();
 	int ret = temp->MfConnect(Conf.Ip.c_str(), Conf.port);
 	if (SOCKET_ERROR != ret)	// 成功连接后就加入正式队列
 	{
@@ -326,7 +326,7 @@ bool CClientLinkManage::MfLinkIsSurvive(std::string name)
 
 void CClientLinkManage::MfSendThread()
 {
-	std::thread::id threadid = std::this_thread::get_id();
+	//std::thread::id threadid = std::this_thread::get_id();
 
 	MdBarrier.MfWait();
 
@@ -398,15 +398,6 @@ bool CClientLinkManage::RegMsg(std::string LinkName, int MsgId, MsgFunType fun)
 	if (Link == MdClientLinkList.end())
 		return false;
 	return Link->second->RegMsg(MsgId, fun);
-}
-
-void CClientLinkManage::RegDeafultMsg(std::string LinkName, MsgFunType fun)
-{
-	std::shared_lock<std::shared_mutex> lk(MdClientLinkListMtx);
-	auto Link = MdClientLinkList.find(LinkName);
-	if (Link == MdClientLinkList.end())
-		return;
-	Link->second->RegDeafultMsg(fun);
 }
 
 CServiceNoBlock::CServiceNoBlock() :
@@ -487,6 +478,7 @@ void CServiceNoBlock::Init()
 bool CServiceNoBlock::Mf_NoBlock_Start(ServiceConf Conf)
 {
 	MdConf = Conf;
+	SelfDealPkgHead = Conf.SelfDealPkgHead;
 	Init();
 
 	if (!Mf_Init_ListenSock())
@@ -902,6 +894,7 @@ CServiceEpoll::~CServiceEpoll()
 bool CServiceEpoll::Mf_Epoll_Start(ServiceConf Conf)
 {
 	MdConf = Conf;
+	SelfDealPkgHead = Conf.SelfDealPkgHead;
 	Init();
 
 	for (int i = 0; i < MdConf.MdDisposeThreadNums; ++i)		// 为各个处理线程建立epoll的描述符

@@ -64,6 +64,7 @@
 #include <future>
 #include <list>
 #include <type_traits>
+#include "google/protobuf/message.h"
 
 static const int DEFAULTBUFFERLEN = 65536;
 
@@ -466,13 +467,25 @@ public:
 	bool	MfDataToBuffer(const char* data, int len)		/*压数据到发送缓冲区*/ { return MdPSendBuffer.MfDataToBuffer(data, len); }
 	bool	MfSendMsg(int MsgId, const char* data, int len)
 	{
+		if (!data)
+			return false;
 		CNetMsg Msg;
 		Msg.Head.MdCmd = MsgId;
-		Msg.Head.MdLen = len + sizeof(CNetMsgHead);
+		Msg.Head.MdLen = static_cast<int>(len + sizeof(CNetMsgHead));
 		Msg.Data = data;
 		return MdPSendBuffer.MfSendMsg(&Msg);
+	}
+	bool	MfSendMsg(int MsgId, const ::google::protobuf::Message* pMessage)
+	{
+		std::string Pkt = "";
+		if (NULL != pMessage && !pMessage->SerializeToString(&Pkt))
+			return false;
 
-
+		CNetMsg Msg;
+		Msg.Head.MdCmd = MsgId;
+		Msg.Head.MdLen = static_cast<int>(Pkt.size() + sizeof(CNetMsgHead));
+		Msg.Data = Pkt.c_str();
+		return MdPSendBuffer.MfSendMsg(&Msg);
 	}
 };
 
@@ -494,10 +507,10 @@ private:
 	CSocketObj*				MdClientSock = 0;	// 客户连接对象
 	std::atomic<int>		MdIsConnect = 0;	// 表示是否连接成功	
 	std::unordered_map<int, MsgFunType> MsgDealFuncMap;
-	MsgFunType							DeafultMsgDeal;
+	bool					SelfDealPkgHead;	// 创建者自己处理包头数据
 private:
 public:
-	CClientLink(std::string s) {};
+	CClientLink(bool _SelfDealPkgHead = false): SelfDealPkgHead(_SelfDealPkgHead)  {};
 	~CClientLink() { MfClose(); }
 	int MfConnect(const char* ip, unsigned short port);	/*发起一个连接*/
 	int MfClose();										/*关闭一个连接*/
@@ -520,22 +533,19 @@ public:
 		MsgDealFuncMap[MsgId] = fun;
 		return true;
 	}
-	void RegDeafultMsg(MsgFunType fun)
-	{
-		DeafultMsgDeal = fun;
-	}
 
 	virtual void MfVNetMsgDisposeFun(SOCKET sock, CSocketObj* Ser, CNetMsgHead* msg, std::thread::id& threadid)
 	{
 		auto Fun = MsgDealFuncMap.find(msg->MdCmd);
 		if (Fun == MsgDealFuncMap.end())
-		{
-			if (DeafultMsgDeal.operator bool())
-				DeafultMsgDeal(Ser, msg, msg->MdLen);												// 注意默认消息是带包头传递的
+		{									
 			return;
 		}
 
-		Fun->second(Ser, ((char*)msg) + sizeof(CNetMsgHead), msg->MdLen - sizeof(CNetMsgHead));		// 正常处理不带包头
+		if (SelfDealPkgHead)
+			Fun->second(Ser, ((char*)msg) + sizeof(CNetMsgHead), static_cast<int>(msg->MdLen - sizeof(CNetMsgHead)));
+		else
+			Fun->second(Ser, msg, msg->MdLen);	
 	}
 };
 
@@ -569,7 +579,6 @@ private:
 	void MfRecvThread();											// 接收线程，循环调用recv，收发线程根据是否可用标志确定行为
 public:
 	bool RegMsg(std::string LinkName, int MsgId, MsgFunType fun);
-	void RegDeafultMsg(std::string LinkName, MsgFunType fun);
 };
 
 typedef std::function<void()> OnCloseFunType;
@@ -585,6 +594,7 @@ struct ServiceConf
 	int					SecondBufferRecvLen = DEFAULTBUFFERLEN;// 第二缓冲区长度
 	int					RawSocketSendLen = 0;		// socket本身缓冲区长度
 	int					RawSocketRecvLen = 0;		// socket本身缓冲区长度
+	bool				SelfDealPkgHead = 0;		// 是否自己处理包头
 	OnCloseFunType*		OnCloseFun = nullptr;
 };
 
@@ -604,9 +614,9 @@ protected:
 	std::unordered_map<SOCKET, CSocketObj*>*	MdClientLeaveList;			// 等待从正式列表中移除的缓冲列表
 	std::mutex*									MdClientLeaveListMtx;		// 移除列表的锁
 	CThreadPool*								MdThreadPool;
+	bool										SelfDealPkgHead;			// 创建者自己处理包头数据
 	
 	std::unordered_map<int, MsgFunType>			MsgDealFuncMap;				// 注册的消息列表
-	MsgFunType									DeafultMsgDeal;
 
 	int					MdPublicCacheLen = 0;	// 每条处理线程一个公共缓冲区,处理数据取出时也是trylock,然后把消息写到这里
 	std::vector<char*>	MdPublicCache;			// 这样dispose线程就不会小概率卡住了
@@ -645,22 +655,20 @@ public:
 		MsgDealFuncMap[MsgId] = fun;
 		return true;
 	}
-	void RegDeafultMsg(MsgFunType fun)
-	{
-		DeafultMsgDeal = fun;
-	}
 
 	virtual void MfVNetMsgDisposeFun(SOCKET sock, CSocketObj* cli, CNetMsgHead* msg, std::thread::id& threadid)
 	{
 		auto Fun = MsgDealFuncMap.find(msg->MdCmd);
 		if (Fun == MsgDealFuncMap.end())
-		{
-			if (DeafultMsgDeal.operator bool())
-				DeafultMsgDeal(cli, msg, msg->MdLen);												// 注意默认消息是带包头传递的
+		{											
 			return;
 		}
 
-		Fun->second(cli, ((char*)msg) + sizeof(CNetMsgHead), msg->MdLen - sizeof(CNetMsgHead));		// 正常处理不带包头
+
+		if (SelfDealPkgHead)
+			Fun->second(cli, ((char*)msg) + sizeof(CNetMsgHead), static_cast<int>(msg->MdLen - sizeof(CNetMsgHead)));
+		else
+			Fun->second(cli, msg, msg->MdLen);
 	}
 };
 

@@ -874,10 +874,35 @@ void CServiceNoBlock::Mf_NoBlock_ClientLeave(std::thread::id threadid, int SeqNu
 	}
 }
 
-#ifndef WIN32
-CServiceEpoll::CServiceEpoll() :
-	CServiceNoBlock()
+void CServiceNoBlock::MfVNetMsgDisposeFun(SOCKET sock, CSocketObj* cli, CNetMsgHead* msg, std::thread::id& threadid)
 {
+	auto Fun = MsgDealFuncMap.find(msg->MdCmd);
+	if (Fun == MsgDealFuncMap.end())
+	{
+		return;
+	}
+
+
+	if (SelfDealPkgHead)
+		Fun->second(cli, ((char*)msg) + sizeof(CNetMsgHead), static_cast<int>(msg->MdLen - sizeof(CNetMsgHead)));
+	else
+		Fun->second(cli, msg, msg->MdLen);
+}
+
+#ifndef WIN32
+CServiceEpoll::CServiceEpoll():
+	MdPClientJoinList(nullptr),
+	MdPClientJoinListMtx(nullptr),
+	MdPClientFormalList(nullptr),
+	MdPClientFormalList_LinkUid(nullptr),
+	MdLinkUidCount(nullptr),
+	MdPClientFormalListMtx(nullptr),
+	MdClientLeaveList(nullptr),
+	MdClientLeaveListMtx(nullptr),
+	MdThreadPool(nullptr),
+	MdPublicCacheLen(1024 * 200)
+{
+
 	MdThreadAvgPeoples = (MdConf.MdServiceMaxPeoples / MdConf.MdDisposeThreadNums) + 100;
 	for (int i = 0; i < MdConf.MdDisposeThreadNums; ++i)
 	{
@@ -889,6 +914,63 @@ CServiceEpoll::~CServiceEpoll()
 {
 	for (auto it : MdEpoll_In_Event)
 		delete[] it;
+
+	if (MdThreadPool)
+		delete MdThreadPool;
+	MdThreadPool = nullptr;
+
+	if (MdPClientFormalList)
+		delete[] MdPClientFormalList;
+	MdPClientFormalList = nullptr;
+
+	if (MdPClientFormalList_LinkUid)
+		delete[] MdPClientFormalList_LinkUid;
+	MdPClientFormalList_LinkUid = nullptr;
+
+	if (MdLinkUidCount)
+		delete[] MdLinkUidCount;
+	MdLinkUidCount = nullptr;
+
+	if (MdPClientFormalListMtx)
+		delete[] MdPClientFormalListMtx;
+	MdPClientFormalListMtx = nullptr;
+
+	if (MdPClientJoinList)
+		delete[] MdPClientJoinList;
+	MdPClientJoinList = nullptr;
+
+	if (MdPClientJoinListMtx)
+		delete[] MdPClientJoinListMtx;
+	MdPClientJoinListMtx = nullptr;
+
+	if (MdClientLeaveList)
+		delete[] MdClientLeaveList;
+	MdClientLeaveList = nullptr;
+
+	if (MdClientLeaveListMtx)
+		delete[] MdClientLeaveListMtx;
+	MdClientLeaveListMtx = nullptr;
+
+	for (auto& it : MdPublicCache)
+		delete[] it;
+	MdPublicCache.clear();
+}
+
+void CServiceEpoll::Init()
+{
+	for (int i = 0; i < MdConf.MdDisposeThreadNums; ++i)
+		Md_CSocketObj_POOL.push_back(new CObjectPool<CSocketObj>(MdConf.MdServiceMaxPeoples / MdConf.MdDisposeThreadNums + 10));
+	MdPClientFormalList = new std::unordered_map<SOCKET, CSocketObj*>[MdConf.MdDisposeThreadNums];
+	MdPClientFormalList_LinkUid = new std::unordered_map<int64_t, CSocketObj*>[MdConf.MdDisposeThreadNums];
+	MdLinkUidCount = new int[MdConf.MdDisposeThreadNums] {};
+	MdPClientFormalListMtx = new std::shared_mutex[MdConf.MdDisposeThreadNums];
+	MdPClientJoinList = new std::unordered_map<SOCKET, CSocketObj*>[MdConf.MdDisposeThreadNums];
+	MdPClientJoinListMtx = new std::mutex[MdConf.MdDisposeThreadNums];
+	MdClientLeaveList = new std::unordered_map<SOCKET, CSocketObj*>[MdConf.MdDisposeThreadNums];
+	MdClientLeaveListMtx = new std::mutex[MdConf.MdDisposeThreadNums];
+	MdThreadPool = new CThreadPool;
+	for (int i = 0; i < MdConf.MdDisposeThreadNums; ++i)
+		MdPublicCache.push_back(new char[MdPublicCacheLen]);
 }
 
 bool CServiceEpoll::Mf_Epoll_Start(ServiceConf Conf)
@@ -929,7 +1011,46 @@ bool CServiceEpoll::Mf_Epoll_Start(ServiceConf Conf)
 
 void CServiceEpoll::Mf_Epoll_Stop()
 {
-	CServiceNoBlock::Mf_NoBlock_Stop();
+	MdThreadPool->MfStop();
+}
+
+bool CServiceEpoll::Mf_Init_ListenSock()
+{
+	std::thread::id threadid = std::this_thread::get_id();
+
+	// 初始化监听套接字
+	sockaddr_in addr{};
+	addr.sin_family = AF_INET;
+	addr.sin_port = htons(MdConf.port);
+#ifndef WIN32
+	if (!MdConf.Ip.empty())		addr.sin_addr.s_addr = inet_addr(MdConf.Ip.c_str());
+	else						addr.sin_addr.s_addr = INADDR_ANY;
+#else
+	if (!MdConf.Ip.empty())		addr.sin_addr.S_un.S_addr = inet_addr(MdConf.Ip.c_str());
+	else						addr.sin_addr.S_un.S_addr = INADDR_ANY;
+#endif
+
+	MdListenSock = socket(AF_INET, SOCK_STREAM, 0);
+	if (SOCKET_ERROR == MdListenSock)
+		return false;
+	int reuse = 1;
+	setsockopt(MdListenSock, SOL_SOCKET, SO_REUSEADDR, (const char*)&reuse, sizeof(int));
+	if (SOCKET_ERROR == bind(MdListenSock, (sockaddr*)&addr, sizeof(addr)))
+		return false;
+	if (SOCKET_ERROR == listen(MdListenSock, 100))
+		return false;
+
+	// 将接收套接字设为非阻塞，这里为了解决两个问题
+	// 1是阻塞套接字，在整个服务程序退出时，如果没有客户端连接到来，会导致accept线程阻塞迟迟无法退出
+	// 2是在unp第十六章非阻塞accept里，不过这个问题只在单线程情况下出现，就不写了
+#ifndef WIN32														// 对套接字设置非阻塞
+	int flags = fcntl(MdListenSock, F_GETFL, 0);
+	fcntl(MdListenSock, F_SETFL, flags | O_NONBLOCK);
+#else
+	unsigned long ul = 1;
+	ioctlsocket(MdListenSock, FIONBIO, &ul);
+#endif
+	return true;
 }
 
 void CServiceEpoll::Mf_Epoll_AcceptThread()
@@ -1207,5 +1328,20 @@ void CServiceEpoll::Mf_Epoll_ClientLeave(std::thread::id threadid, int SeqNumber
 			MdClientLeaveList[SeqNumber].clear();
 		}
 	}
+}
+
+void CServiceEpoll::MfVNetMsgDisposeFun(SOCKET sock, CSocketObj* cli, CNetMsgHead* msg, std::thread::id& threadid)
+{
+	auto Fun = MsgDealFuncMap.find(msg->MdCmd);
+	if (Fun == MsgDealFuncMap.end())
+	{
+		return;
+	}
+
+
+	if (SelfDealPkgHead)
+		Fun->second(cli, ((char*)msg) + sizeof(CNetMsgHead), static_cast<int>(msg->MdLen - sizeof(CNetMsgHead)));
+	else
+		Fun->second(cli, msg, msg->MdLen);
 }
 #endif

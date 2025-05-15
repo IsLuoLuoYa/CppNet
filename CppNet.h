@@ -631,7 +631,7 @@ protected:			// 这一组变量，用来在服务结束时，按accept recv disp
 	Barrier MdBarrier4;		// send线程			和	dispose线程			的同步和前面不同，用屏障的概念等待多个线程来继续执行
 public:
 	CServiceNoBlock();
-	virtual ~CServiceNoBlock();
+	~CServiceNoBlock();
 	void Init();
 	bool Mf_NoBlock_Start(ServiceConf Conf);		// 启动收发处理线程的非阻塞版本
 	bool Mf_NoBlock_Stop();							// 遍历所有连接
@@ -656,41 +656,63 @@ public:
 		return true;
 	}
 
-	virtual void MfVNetMsgDisposeFun(SOCKET sock, CSocketObj* cli, CNetMsgHead* msg, std::thread::id& threadid)
-	{
-		auto Fun = MsgDealFuncMap.find(msg->MdCmd);
-		if (Fun == MsgDealFuncMap.end())
-		{											
-			return;
-		}
-
-
-		if (SelfDealPkgHead)
-			Fun->second(cli, ((char*)msg) + sizeof(CNetMsgHead), static_cast<int>(msg->MdLen - sizeof(CNetMsgHead)));
-		else
-			Fun->second(cli, msg, msg->MdLen);
-	}
+	void MfVNetMsgDisposeFun(SOCKET sock, CSocketObj* cli, CNetMsgHead* msg, std::thread::id& threadid);
 };
 
 #ifndef WIN32
 
-class CServiceEpoll :public CServiceNoBlock
+class CServiceEpoll
 {
+protected:
+	SOCKET										MdListenSock;				// 监听套接字
+	ServiceConf									MdConf;						// 各种参数
+	CTimer										MdHeartBeatTestInterval;	// 心跳间隔检测用到的计时器
+	std::vector<CObjectPool<CSocketObj>*>		Md_CSocketObj_POOL;			// 客户端对象的对象池
+	std::unordered_map<SOCKET, CSocketObj*>* MdPClientJoinList;			// 非正式客户端缓冲列表，等待加入正式列表，同正式客户列表一样，一个线程对应一个加入列表
+	std::mutex* MdPClientJoinListMtx;		// 非正式客户端列表的锁
+	std::unordered_map<SOCKET, CSocketObj*>* MdPClientFormalList;		// 正式的客户端列表，一个线程对应一个map[],存储当前线程的服务对象,map[threadid]找到对应map，map[threadid][socket]找出socket对应的数据
+	std::shared_mutex* MdPClientFormalListMtx;		// 为一MdPEachDisoposeThreadOfServiceObj[]添加sock时，应MdEachThreadOfMtx[].lock
+	std::unordered_map<int64_t, CSocketObj*>* MdPClientFormalList_LinkUid;// 每个CSocketObj用一个自增的uid来索引以下
+	int* MdLinkUidCount;				// 自增的uid
+	std::unordered_map<SOCKET, CSocketObj*>* MdClientLeaveList;			// 等待从正式列表中移除的缓冲列表
+	std::mutex* MdClientLeaveListMtx;		// 移除列表的锁
+	CThreadPool* MdThreadPool;
+	bool										SelfDealPkgHead;			// 创建者自己处理包头数据
+
+	std::unordered_map<int, MsgFunType>			MsgDealFuncMap;				// 注册的消息列表
+
+	int					MdPublicCacheLen = 0;	// 每条处理线程一个公共缓冲区,处理数据取出时也是trylock,然后把消息写到这里
+	std::vector<char*>	MdPublicCache;			// 这样dispose线程就不会小概率卡住了
+
+	OnCloseFunType* OnCloseFun = nullptr;
+
+protected:			// 用来在服务启动时，等待其他所有线程启动后，再启动Accept线程
+	Barrier MdBarrier1;
+protected:			// 这一组变量，用来在服务结束时，按accept recv dispose send的顺序来结束线程以保证不出错
+	Barrier MdBarrier2;		// accept线程		和	recv线程			的同步变量		！！！！！在epoll中未被使用！！！！！
+	Barrier MdBarrier3;		// recv线程			和	所有dispos线程		的同步变量
+	Barrier MdBarrier4;		// send线程			和	dispose线程			的同步和前面不同，用屏障的概念等待多个线程来继续执行
+
 private:
 	std::vector<SOCKET>			MdEpoll_In_Fd;		// epoll句柄
 	std::vector<epoll_event*>	MdEpoll_In_Event;	// 接收线程用到的结构集合
 	int							MdThreadAvgPeoples;	// 每个线程的平均人数
 public:
 	CServiceEpoll();
-	virtual ~CServiceEpoll();
+	~CServiceEpoll();
+	void Init();
 	bool Mf_Epoll_Start(ServiceConf Conf);
 	void Mf_Epoll_Stop();
+protected:
+	bool Mf_Init_ListenSock();		// 初始化套接字
 private:
 	void Mf_Epoll_AcceptThread();							// 等待客户端连接的线程
 	void Mf_Epoll_RecvAndDisposeThread(int SeqNumber);		// 处理线程
 	void Mf_Epoll_SendThread();								// 发线程
 	void Mf_Epoll_ClientJoin(std::thread::id threadid, int SeqNumber);	// 客户端加入正式列表
 	void Mf_Epoll_ClientLeave(std::thread::id threadid, int SeqNumber);	// 客户端移除正式列表
+
+	void MfVNetMsgDisposeFun(SOCKET sock, CSocketObj* cli, CNetMsgHead* msg, std::thread::id& threadid);
 };
 
 #endif // !WIN32

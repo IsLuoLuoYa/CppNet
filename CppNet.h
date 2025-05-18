@@ -102,16 +102,20 @@ public:
 class CSocketObj;
 typedef std::function<void(CSocketObj*, void*, int)> MsgFunType;
 
+
+#pragma pack(push, 1)
 struct CNetMsgHead
 {
-	int MdLen;		// 该包总长度
-	int MdCmd;		// 该包执行的操作
+	int32_t MdLen;		// 该包总长度
+	int32_t MdCmd;		// 该包执行的操作
 	CNetMsgHead()
 	{
 		MdLen = sizeof(CNetMsgHead);
 		MdCmd = -1;				// 该值为-1时默认为心跳包
 	}
 };
+#pragma pack(pop)
+
 struct CNetMsg
 {
 	CNetMsgHead Head;

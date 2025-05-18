@@ -98,25 +98,34 @@ int CSecondBuffer::MfSocketToBuffer(SOCKET sock)
 bool CSecondBuffer::MfPopFrontMsg(char* Buff, int BuffLen)
 {
 	static int MSG_HEAD_LEN = sizeof(CNetMsgHead);
+	bool Ret = false;
 	std::unique_lock<std::mutex> lk(MdMtx, std::defer_lock);
 	if (!lk.try_lock())
-		return false;
-	if (Mdtail <= MSG_HEAD_LEN)
-		return false;
-	int MsgLen = ((CNetMsgHead*)MdPBuffer)->MdLen;
+		return Ret;
+	if (Mdtail < MSG_HEAD_LEN)
+		return Ret;
+	CNetMsgHead* Msg = ((CNetMsgHead*)MdPBuffer);
+	int MsgLen = Msg->MdLen;
 	if (Mdtail < MsgLen)
-		return false;
+		return Ret;
 	if (BuffLen < MsgLen)
-		return false;
+		return Ret;
 
-	memcpy(Buff, MdPBuffer, MsgLen);
+	// 消息长度比0大, 消息复制出来
+	if (MsgLen > 0)
+	{
+		memcpy(Buff, MdPBuffer, MsgLen);
+		Ret = true;
+	}
+
+
 	int n = Mdtail - MsgLen;
 	if (n >= 0)
 	{
 		memcpy(MdPBuffer, MdPBuffer + MsgLen, n);
 		Mdtail = n;
 	}
-	return true;
+	return Ret;
 }
 
 bool CSecondBuffer::MfSend(SOCKET sock, const char* buf, int len, int* ret)

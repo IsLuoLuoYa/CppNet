@@ -99,32 +99,41 @@ bool CSecondBuffer::MfPopFrontMsg(char* Buff, int BuffLen)
 {
 	static int MSG_HEAD_LEN = sizeof(CNetMsgHead);
 	bool Ret = false;
-	std::unique_lock<std::mutex> lk(MdMtx, std::defer_lock);
-	if (!lk.try_lock())
-		return Ret;
-	if (Mdtail < MSG_HEAD_LEN)
-		return Ret;
-	CNetMsgHead* Msg = ((CNetMsgHead*)MdPBuffer);
-	int MsgLen = Msg->MdLen;
-	if (Mdtail < MsgLen)
-		return Ret;
-	if (BuffLen < MsgLen)
-		return Ret;
 
-	// 消息长度比0大, 消息复制出来
-	if (MsgLen > 0)
+	do
 	{
-		memcpy(Buff, MdPBuffer, MsgLen);
-		Ret = true;
-	}
+		std::unique_lock<std::mutex> lk(MdMtx, std::defer_lock);
+		if (!lk.try_lock())
+			break;
+		if (Mdtail < MSG_HEAD_LEN)
+			break;
+		CNetMsgHead* Msg = ((CNetMsgHead*)MdPBuffer);
+		int MsgLen = Msg->MdLen;
+		if (MsgLen < 0) 
+		{
+			Mdtail = 0;
+			break;
+		}
+		if (Mdtail < MsgLen)
+			break;
+		if (BuffLen < MsgLen)
+			break;
 
+		// 消息长度比0大, 消息复制出来
+		if (MsgLen > 0)
+		{
+			memcpy(Buff, MdPBuffer, MsgLen);
+			Ret = true;
+		}
 
-	int n = Mdtail - MsgLen;
-	if (n >= 0)
-	{
-		memcpy(MdPBuffer, MdPBuffer + MsgLen, n);
-		Mdtail = n;
-	}
+		int n = Mdtail - MsgLen;
+		if (n >= 0)
+		{
+			memcpy(MdPBuffer, MdPBuffer + MsgLen, n);
+			Mdtail = n;
+		}
+	} while (0);
+
 	return Ret;
 }
 
@@ -400,13 +409,13 @@ void CClientLinkManage::MfRecvThread()
 	}
 }
 
-bool CClientLinkManage::RegMsg(std::string LinkName, int MsgId, MsgFunType fun)
+bool CClientLinkManage::RegMsg(std::string LinkName, int MsgId, MsgFunType fun, bool IsDefault)
 {
 	std::shared_lock<std::shared_mutex> lk(MdClientLinkListMtx);
 	auto Link = MdClientLinkList.find(LinkName);
 	if (Link == MdClientLinkList.end())
 		return false;
-	return Link->second->RegMsg(MsgId, fun);
+	return Link->second->RegMsg(MsgId, fun, IsDefault);
 }
 
 CServiceNoBlock::CServiceNoBlock() :
@@ -883,27 +892,46 @@ void CServiceNoBlock::Mf_NoBlock_ClientLeave(std::thread::id threadid, int SeqNu
 	}
 }
 
-bool CServiceNoBlock::RegMsg(int MsgId, MsgFunType fun)
+bool CServiceNoBlock::RegMsg(int MsgId, MsgFunType fun, bool IsDefault)
 {
-	if (MsgDealFuncMap.find(MsgId) != MsgDealFuncMap.end())
-		return false;
-	MsgDealFuncMap[MsgId] = fun;
+	if (IsDefault)
+	{
+		DefaultMsg = fun;
+	}
+	else
+	{
+		if (MsgDealFuncMap.find(MsgId) != MsgDealFuncMap.end())
+			return false;
+		MsgDealFuncMap[MsgId] = fun;
+	}
 	return true;
 }
 
 void CServiceNoBlock::MfVNetMsgDisposeFun(SOCKET sock, CSocketObj* cli, CNetMsgHead* msg, std::thread::id& threadid)
 {
-	auto Fun = MsgDealFuncMap.find(msg->MdCmd);
-	if (Fun == MsgDealFuncMap.end())
+	MsgFunType Fun = nullptr;
+	do
 	{
-		return;
-	}
+		auto TmpIt = MsgDealFuncMap.find(msg->MdCmd);
+		if (TmpIt != MsgDealFuncMap.end())
+		{
+			Fun = TmpIt->second;
+			break;
+		}
+
+		if (DefaultMsg)
+		{
+			Fun = DefaultMsg;
+			break;
+		}
+
+	} while (0);
 
 
 	if (SelfDealPkgHead)
-		Fun->second(cli, ((char*)msg) + sizeof(CNetMsgHead), static_cast<int>(msg->MdLen - sizeof(CNetMsgHead)));
+		Fun(cli, msg, msg->MdLen);
 	else
-		Fun->second(cli, msg, msg->MdLen);
+		Fun(cli, ((char*)msg) + sizeof(CNetMsgHead), static_cast<int>(msg->MdLen - sizeof(CNetMsgHead)));
 }
 
 #ifndef WIN32
@@ -1378,26 +1406,45 @@ void CServiceEpoll::Mf_Epoll_ClientLeave(std::thread::id threadid, int SeqNumber
 	}
 }
 
-bool CServiceEpoll::RegMsg(int MsgId, MsgFunType fun)
+bool CServiceEpoll::RegMsg(int MsgId, MsgFunType fun, bool IsDefault)
 {
-	if (MsgDealFuncMap.find(MsgId) != MsgDealFuncMap.end())
-		return false;
-	MsgDealFuncMap[MsgId] = fun;
+	if (IsDefault)
+	{
+		DefaultMsg = fun;
+	}
+	else
+	{
+		if (MsgDealFuncMap.find(MsgId) != MsgDealFuncMap.end())
+			return false;
+		MsgDealFuncMap[MsgId] = fun;
+	}
 	return true;
 }
 
 void CServiceEpoll::MfVNetMsgDisposeFun(SOCKET sock, CSocketObj* cli, CNetMsgHead* msg, std::thread::id& threadid)
 {
-	auto Fun = MsgDealFuncMap.find(msg->MdCmd);
-	if (Fun == MsgDealFuncMap.end())
+	MsgFunType Fun = nullptr;
+	do
 	{
-		return;
-	}
+		auto TmpIt = MsgDealFuncMap.find(msg->MdCmd);
+		if (TmpIt != MsgDealFuncMap.end())
+		{
+			Fun = TmpIt->second;
+			break;
+		}
+
+		if (DefaultMsg)
+		{
+			Fun = DefaultMsg;
+			break;
+		}
+
+	} while (0);
 
 
 	if (SelfDealPkgHead)
-		Fun->second(cli, ((char*)msg) + sizeof(CNetMsgHead), static_cast<int>(msg->MdLen - sizeof(CNetMsgHead)));
+		Fun(cli, msg, msg->MdLen);
 	else
-		Fun->second(cli, msg, msg->MdLen);
+		Fun(cli, ((char*)msg) + sizeof(CNetMsgHead), static_cast<int>(msg->MdLen - sizeof(CNetMsgHead)));
 }
 #endif

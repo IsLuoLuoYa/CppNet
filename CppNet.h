@@ -511,6 +511,7 @@ private:
 	CSocketObj*				MdClientSock = 0;	// 客户连接对象
 	std::atomic<int>		MdIsConnect = 0;	// 表示是否连接成功	
 	std::unordered_map<int, MsgFunType> MsgDealFuncMap;
+	MsgFunType				DefaultMsg;
 	bool					SelfDealPkgHead;	// 创建者自己处理包头数据
 private:
 public:
@@ -530,26 +531,48 @@ public:
 	bool MfPopFrontMsg(char* Buff, int BuffLen)								/*供使用者处理数据，第一条信息移出缓冲区*/ { return MdClientSock->MfPopFrontMsg(Buff, BuffLen); }
 
 public:
-	bool RegMsg(int MsgId, MsgFunType fun)
+	bool RegMsg(int MsgId, MsgFunType fun, bool IsDefault = false)
 	{
-		if (MsgDealFuncMap.find(MsgId) != MsgDealFuncMap.end())
-			return false;
-		MsgDealFuncMap[MsgId] = fun;
+		if (IsDefault)
+		{
+			DefaultMsg = fun;
+		}
+		else
+		{
+			if (MsgDealFuncMap.find(MsgId) != MsgDealFuncMap.end())
+				return false;
+			MsgDealFuncMap[MsgId] = fun;
+		}
 		return true;
 	}
 
-	virtual void MfVNetMsgDisposeFun(SOCKET sock, CSocketObj* Ser, CNetMsgHead* msg, std::thread::id& threadid)
+	void MfVNetMsgDisposeFun(SOCKET sock, CSocketObj* Ser, CNetMsgHead* msg, std::thread::id& threadid)
 	{
-		auto Fun = MsgDealFuncMap.find(msg->MdCmd);
-		if (Fun == MsgDealFuncMap.end())
-		{									
+		MsgFunType Fun = nullptr;
+		do
+		{
+			auto TmpIt = MsgDealFuncMap.find(msg->MdCmd);
+			if (TmpIt != MsgDealFuncMap.end())
+			{
+				Fun = TmpIt->second;
+				break;
+			}
+
+			if (DefaultMsg)
+			{
+				Fun = DefaultMsg;
+				break;
+			}
+
+		} while (0);
+
+		if (!Fun)
 			return;
-		}
 
 		if (SelfDealPkgHead)
-			Fun->second(Ser, ((char*)msg) + sizeof(CNetMsgHead), static_cast<int>(msg->MdLen - sizeof(CNetMsgHead)));
+			Fun(Ser, ((char*)msg) + sizeof(CNetMsgHead), static_cast<int>(msg->MdLen - sizeof(CNetMsgHead)));
 		else
-			Fun->second(Ser, msg, msg->MdLen);	
+			Fun(Ser, msg, msg->MdLen);	
 	}
 };
 
@@ -582,7 +605,7 @@ private:
 	void MfSendThread();											// 发送线程，循环调用send，收发线程根据是否可用标志确定行为
 	void MfRecvThread();											// 接收线程，循环调用recv，收发线程根据是否可用标志确定行为
 public:
-	bool RegMsg(std::string LinkName, int MsgId, MsgFunType fun);
+	bool RegMsg(std::string LinkName, int MsgId, MsgFunType fun, bool IsDefault = false);
 };
 
 typedef std::function<void()> OnCloseFunType;
@@ -621,6 +644,7 @@ protected:
 	bool										SelfDealPkgHead;			// 创建者自己处理包头数据
 	
 	std::unordered_map<int, MsgFunType>			MsgDealFuncMap;				// 注册的消息列表
+	MsgFunType									DefaultMsg;
 
 	int					MdPublicCacheLen = 0;	// 每条处理线程一个公共缓冲区,处理数据取出时也是trylock,然后把消息写到这里
 	std::vector<char*>	MdPublicCache;			// 这样dispose线程就不会小概率卡住了
@@ -652,7 +676,7 @@ private:
 	void Mf_NoBlock_ClientJoin(std::thread::id threadid, int SeqNumber);	// 客户端加入正式列表
 	void Mf_NoBlock_ClientLeave(std::thread::id threadid, int SeqNumber);	// 客户端移除正式列表
 public:
-	bool RegMsg(int MsgId, MsgFunType fun);
+	bool RegMsg(int MsgId, MsgFunType fun, bool IsDefault = false);
 
 	void MfVNetMsgDisposeFun(SOCKET sock, CSocketObj* cli, CNetMsgHead* msg, std::thread::id& threadid);
 };
@@ -678,7 +702,7 @@ protected:
 	bool										SelfDealPkgHead;			// 创建者自己处理包头数据
 
 	std::unordered_map<int, MsgFunType>			MsgDealFuncMap;				// 注册的消息列表
-
+	MsgFunType									DefaultMsg;
 	int					MdPublicCacheLen = 0;	// 每条处理线程一个公共缓冲区,处理数据取出时也是trylock,然后把消息写到这里
 	std::vector<char*>	MdPublicCache;			// 这样dispose线程就不会小概率卡住了
 
@@ -714,7 +738,7 @@ private:
 	void Mf_Epoll_ClientLeave(std::thread::id threadid, int SeqNumber);	// 客户端移除正式列表
 
 public:
-	bool RegMsg(int MsgId, MsgFunType fun);
+	bool RegMsg(int MsgId, MsgFunType fun, bool IsDefault = false);
 	void MfVNetMsgDisposeFun(SOCKET sock, CSocketObj* cli, CNetMsgHead* msg, std::thread::id& threadid);
 };
 

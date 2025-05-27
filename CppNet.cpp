@@ -303,7 +303,7 @@ bool CClientLinkManage::MfCreateAddLink(ClientConf Conf)
 			return false;
 	}
 
-	CClientLink* temp = new	CClientLink();
+	CClientLink* temp = new	CClientLink(Conf.SelfDealPkgHead);
 	int ret = temp->MfConnect(Conf.Ip.c_str(), Conf.port);
 	if (SOCKET_ERROR != ret)	// 成功连接后就加入正式队列
 	{
@@ -674,7 +674,7 @@ void CServiceNoBlock::Mf_NoBlock_AcceptThread()
 			Uid |= MdLinkUidCount[minId];
 			TempSocketObj->MfSetUid(Uid);
 			std::lock_guard<std::mutex> lk(MdPClientJoinListMtx[minId]);								// 对应的线程map上锁
-			MdPClientJoinList[minId].insert(std::pair<SOCKET, CSocketObj*>(sock, TempSocketObj));		// 添加该连接到加入缓冲区
+			MdPClientJoinList[minId].insert(std::pair<SOCKET, CSocketObj*>(Uid, TempSocketObj));		// 添加该连接到加入缓冲区
 		}
 	}
 
@@ -931,9 +931,9 @@ void CServiceNoBlock::MfVNetMsgDisposeFun(SOCKET sock, CSocketObj* cli, CNetMsgH
 		return;
 
 	if (SelfDealPkgHead)
-		Fun(cli, msg, msg->MdLen);
+		Fun(cli, ((char*)msg), msg->MdLen, msg->MdLen - sizeof(CNetMsgHead));
 	else
-		Fun(cli, ((char*)msg) + sizeof(CNetMsgHead), static_cast<int>(msg->MdLen - sizeof(CNetMsgHead)));
+		Fun(cli, ((char*)msg) + sizeof(CNetMsgHead), msg->MdLen, msg->MdLen - sizeof(CNetMsgHead));
 }
 
 #ifndef WIN32
@@ -1079,7 +1079,7 @@ void CServiceEpoll::VisitSocketObj(std::function<bool(CSocketObj*)> Fun)
 	}
 }
 
-bool CServiceEpoll::Mf_SendMsgByUid(int64_t Uid, int MsgId, char* Data, int len)
+bool CServiceEpoll::Mf_SendMsgByUid(int64_t Uid, int MsgId, const char* Data, int len)
 {
 	int ThreadNums = Uid >> 32;
 	if (ThreadNums >= MdConf.MdDisposeThreadNums)
@@ -1201,7 +1201,7 @@ void CServiceEpoll::Mf_Epoll_AcceptThread()
 			Uid |= MdLinkUidCount[minId];
 			TempSocketObj->MfSetUid(Uid);
 			std::lock_guard<std::mutex> lk(MdPClientJoinListMtx[minId]);								// 对应的线程map上锁
-			MdPClientJoinList[minId].insert(std::pair<SOCKET, CSocketObj*>(sock, TempSocketObj));		// 添加该连接到加入缓冲区
+			MdPClientJoinList[minId].insert(std::pair<SOCKET, CSocketObj*>(Uid, TempSocketObj));		// 添加该连接到加入缓冲区
 		}
 	}
 
@@ -1446,8 +1446,8 @@ void CServiceEpoll::MfVNetMsgDisposeFun(SOCKET sock, CSocketObj* cli, CNetMsgHea
 		return;
 
 	if (SelfDealPkgHead)
-		Fun(cli, msg, msg->MdLen);
+		Fun(cli, ((char*)msg), msg->MdLen, msg->MdLen- sizeof(CNetMsgHead));
 	else
-		Fun(cli, ((char*)msg) + sizeof(CNetMsgHead), static_cast<int>(msg->MdLen - sizeof(CNetMsgHead)));
+		Fun(cli, ((char*)msg) + sizeof(CNetMsgHead), msg->MdLen, msg->MdLen - sizeof(CNetMsgHead));
 }
 #endif

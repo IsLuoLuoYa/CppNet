@@ -100,7 +100,7 @@ public:
 };
 
 class CSocketObj;
-typedef std::function<void(CSocketObj*, void*, int)> MsgFunType;
+typedef std::function<void(CSocketObj*, char*, int, int)> MsgFunType;
 
 
 #pragma pack(push, 1)
@@ -502,6 +502,7 @@ struct ClientConf
 	int					SecondBufferRecvLen = DEFAULTBUFFERLEN;// 第二缓冲区长度
 	int					RawSocketSendLen = 0;		// socket本身缓冲区长度
 	int					RawSocketRecvLen = 0;		// socket本身缓冲区长度
+	bool				SelfDealPkgHead = 0;		// 是否自己处理包头
 };
 
 class CClientLink
@@ -570,9 +571,9 @@ public:
 			return;
 
 		if (SelfDealPkgHead)
-			Fun(Ser, ((char*)msg) + sizeof(CNetMsgHead), static_cast<int>(msg->MdLen - sizeof(CNetMsgHead)));
+			Fun(Ser, ((char*)msg), msg->MdLen, msg->MdLen - sizeof(CNetMsgHead));
 		else
-			Fun(Ser, msg, msg->MdLen);	
+			Fun(Ser, ((char*)msg) + sizeof(CNetMsgHead), msg->MdLen, msg->MdLen - sizeof(CNetMsgHead));
 	}
 };
 
@@ -726,7 +727,7 @@ public:
 	bool Mf_Epoll_Start(ServiceConf Conf);
 	void Mf_Epoll_Stop();
 	void VisitSocketObj(std::function<bool(CSocketObj*)> Fun);
-	bool Mf_SendMsgByUid(int64_t Uid, int MsgId, char* Data, int len);
+	bool Mf_SendMsgByUid(int64_t Uid, int MsgId, const char* Data, int len);
 	void SetOncloseFun(OnCloseFunType* Fun) { OnCloseFun = Fun; }
 protected:
 	bool Mf_Init_ListenSock();		// 初始化套接字

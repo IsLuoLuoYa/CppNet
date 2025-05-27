@@ -511,7 +511,7 @@ private:
 	CSocketObj*				MdClientSock = 0;	// 客户连接对象
 	std::atomic<int>		MdIsConnect = 0;	// 表示是否连接成功	
 	std::unordered_map<int, MsgFunType> MsgDealFuncMap;
-	MsgFunType				DefaultMsg;
+	MsgFunType				DefaultMsg = nullptr;
 	bool					SelfDealPkgHead;	// 创建者自己处理包头数据
 private:
 public:
@@ -644,7 +644,7 @@ protected:
 	bool										SelfDealPkgHead;			// 创建者自己处理包头数据
 	
 	std::unordered_map<int, MsgFunType>			MsgDealFuncMap;				// 注册的消息列表
-	MsgFunType									DefaultMsg;
+	MsgFunType									DefaultMsg = nullptr;
 
 	int					MdPublicCacheLen = 0;	// 每条处理线程一个公共缓冲区,处理数据取出时也是trylock,然后把消息写到这里
 	std::vector<char*>	MdPublicCache;			// 这样dispose线程就不会小概率卡住了
@@ -702,7 +702,7 @@ protected:
 	bool										SelfDealPkgHead;			// 创建者自己处理包头数据
 
 	std::unordered_map<int, MsgFunType>			MsgDealFuncMap;				// 注册的消息列表
-	MsgFunType									DefaultMsg;
+	MsgFunType									DefaultMsg = nullptr;
 	int					MdPublicCacheLen = 0;	// 每条处理线程一个公共缓冲区,处理数据取出时也是trylock,然后把消息写到这里
 	std::vector<char*>	MdPublicCache;			// 这样dispose线程就不会小概率卡住了
 

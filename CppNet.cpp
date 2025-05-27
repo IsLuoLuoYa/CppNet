@@ -927,6 +927,8 @@ void CServiceNoBlock::MfVNetMsgDisposeFun(SOCKET sock, CSocketObj* cli, CNetMsgH
 
 	} while (0);
 
+	if (!Fun)
+		return;
 
 	if (SelfDealPkgHead)
 		Fun(cli, msg, msg->MdLen);
@@ -947,12 +949,6 @@ CServiceEpoll::CServiceEpoll():
 	MdThreadPool(nullptr),
 	MdPublicCacheLen(1024 * 200)
 {
-
-	MdThreadAvgPeoples = (MdConf.MdServiceMaxPeoples / MdConf.MdDisposeThreadNums) + 100;
-	for (int i = 0; i < MdConf.MdDisposeThreadNums; ++i)
-	{
-		MdEpoll_In_Event.push_back(new epoll_event[MdThreadAvgPeoples]);
-	}
 }
 
 CServiceEpoll::~CServiceEpoll()
@@ -1016,6 +1012,11 @@ void CServiceEpoll::Init()
 	MdThreadPool = new CThreadPool;
 	for (int i = 0; i < MdConf.MdDisposeThreadNums; ++i)
 		MdPublicCache.push_back(new char[MdPublicCacheLen]);
+	MdThreadAvgPeoples = (MdConf.MdServiceMaxPeoples / MdConf.MdDisposeThreadNums) + 100;
+	for (int i = 0; i < MdConf.MdDisposeThreadNums; ++i)
+	{
+		MdEpoll_In_Event.push_back(new epoll_event[MdThreadAvgPeoples]);
+	}
 }
 
 bool CServiceEpoll::Mf_Epoll_Start(ServiceConf Conf)
@@ -1239,7 +1240,6 @@ void CServiceEpoll::Mf_Epoll_RecvAndDisposeThread(int SeqNumber)
 		{
 			std::shared_lock<std::shared_mutex> ReadLock(MdPClientFormalListMtx[SeqNumber]);
 			Epoll_N_Fds = epoll_wait(MdEpoll_In_Fd[SeqNumber], MdEpoll_In_Event[SeqNumber], MdThreadAvgPeoples, 0);
-
 			// 第一个循环对epoll返回的集合接收数据
 			for (int j = 0; j < Epoll_N_Fds; ++j)
 			{
@@ -1395,8 +1395,8 @@ void CServiceEpoll::Mf_Epoll_ClientLeave(std::thread::id threadid, int SeqNumber
 			{
 				if (OnCloseFun)
 					(*OnCloseFun)();
-				it->second->MfClose();
 				epoll_ctl(MdEpoll_In_Fd[SeqNumber], EPOLL_CTL_DEL, it->first, nullptr);
+				it->second->MfClose();
 				MdPClientFormalList[SeqNumber].erase(it->first);
 				MdPClientFormalList_LinkUid[SeqNumber].erase(it->second->MfGetUid());
 				Md_CSocketObj_POOL[SeqNumber]->MfReturnObject(it->second);
@@ -1441,6 +1441,9 @@ void CServiceEpoll::MfVNetMsgDisposeFun(SOCKET sock, CSocketObj* cli, CNetMsgHea
 
 	} while (0);
 
+
+	if (!Fun)
+		return;
 
 	if (SelfDealPkgHead)
 		Fun(cli, msg, msg->MdLen);

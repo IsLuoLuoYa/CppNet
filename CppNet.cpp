@@ -845,7 +845,7 @@ void CServiceNoBlock::Mf_NoBlock_ClientJoin(std::thread::id threadid, int SeqNum
 		std::lock_guard<std::shared_mutex> WriteLock(MdPClientFormalListMtx[SeqNumber]);
 		for (auto it = MdPClientJoinList[SeqNumber].begin(); it != MdPClientJoinList[SeqNumber].end(); ++it)
 		{
-			MdPClientFormalList_LinkUid[SeqNumber][it->first] = it->second;
+			MdPClientFormalList_LinkUid[SeqNumber][it->second->MfGetUid()] = it->second;
 			MdPClientFormalList[SeqNumber][it->second->MfGetSock()] = it->second;
 		}
 		MdPClientJoinList[SeqNumber].clear();
@@ -1358,7 +1358,7 @@ void CServiceEpoll::Mf_Epoll_ClientJoin(std::thread::id threadid, int SeqNumber)
 		std::lock_guard<std::shared_mutex> WriteLock(MdPClientFormalListMtx[SeqNumber]);
 		for (auto it = MdPClientJoinList[SeqNumber].begin(); it != MdPClientJoinList[SeqNumber].end(); ++it)
 		{
-			MdPClientFormalList_LinkUid[SeqNumber][it->first] = it->second;
+			MdPClientFormalList_LinkUid[SeqNumber][it->second->MfGetUid()] = it->second;
 			MdPClientFormalList[SeqNumber].insert(std::pair<SOCKET, CSocketObj*>(it->second->MfGetSock(), it->second));
 			EvIn.data.fd = it->second->MfGetSock();
 			epoll_ctl(MdEpoll_In_Fd[SeqNumber], EPOLL_CTL_ADD, it->second->MfGetSock(), &EvIn);		// 设置套接字到收线程的Epoll

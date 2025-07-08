@@ -670,7 +670,7 @@ void CServiceNoBlock::Mf_NoBlock_AcceptThread()
 			MdLinkUidCount[minId]++;
 			if (MdLinkUidCount[minId] < 0)
 				MdLinkUidCount[minId] = 1;
-			int64_t Uid = MdLinkUidCount[minId] << 32;
+			int64_t Uid = static_cast<int64_t>(minId) << 32;
 			Uid |= MdLinkUidCount[minId];
 			TempSocketObj->MfSetUid(Uid);
 			std::lock_guard<std::mutex> lk(MdPClientJoinListMtx[minId]);								// 对应的线程map上锁
@@ -1197,7 +1197,7 @@ void CServiceEpoll::Mf_Epoll_AcceptThread()
 			MdLinkUidCount[minId]++;
 			if (MdLinkUidCount[minId] < 0)
 				MdLinkUidCount[minId] = 1;
-			int64_t Uid = MdLinkUidCount[minId] << 32;
+			int64_t Uid = static_cast<int64_t>(minId) << 32;
 			Uid |= MdLinkUidCount[minId];
 			TempSocketObj->MfSetUid(Uid);
 			std::lock_guard<std::mutex> lk(MdPClientJoinListMtx[minId]);								// 对应的线程map上锁

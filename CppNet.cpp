@@ -335,6 +335,16 @@ bool CClientLinkManage::MfSendMsg(std::string name, int MsgId, const char* data,
 	return it->second->MfSendMsg(MsgId, data, len);
 }
 
+void CClientLinkManage::ClientSocketObjOp(const std::string & name, std::function<bool(CSocketObj*)> Fun)
+{
+	std::shared_lock<std::shared_mutex> lk(MdClientLinkListMtx);
+	auto it = MdClientLinkList.find(name);
+	if (it == MdClientLinkList.end())
+		return;
+
+	Fun(it->second->GetScoketObj());
+}
+
 bool CClientLinkManage::MfLinkIsSurvive(std::string name)
 {
 	std::shared_lock<std::shared_mutex> lk(MdClientLinkListMtx);
@@ -881,7 +891,7 @@ void CServiceNoBlock::Mf_NoBlock_ClientLeave(std::thread::id threadid, int SeqNu
 			for (auto it = MdClientLeaveList[SeqNumber].begin(); it != MdClientLeaveList[SeqNumber].end(); ++it)
 			{
 				if (OnCloseFun)
-					(*OnCloseFun)();
+					OnCloseFun(it->second);
 				MdPClientFormalList[SeqNumber].erase(it->first);
 				MdPClientFormalList_LinkUid[SeqNumber].erase(it->second->MfGetUid());
 				it->second->MfClose();
@@ -1395,7 +1405,7 @@ void CServiceEpoll::Mf_Epoll_ClientLeave(std::thread::id threadid, int SeqNumber
 			for (auto it = MdClientLeaveList[SeqNumber].begin(); it != MdClientLeaveList[SeqNumber].end(); ++it)
 			{
 				if (OnCloseFun)
-					(*OnCloseFun)();
+					OnCloseFun(it->second);
 				epoll_ctl(MdEpoll_In_Fd[SeqNumber], EPOLL_CTL_DEL, it->first, nullptr);
 				it->second->MfClose();
 				MdPClientFormalList[SeqNumber].erase(it->first);

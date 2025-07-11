@@ -65,6 +65,7 @@
 #include <list>
 #include <type_traits>
 #include "google/protobuf/message.h"
+#include "ObjectPool.h"
 
 static const int DEFAULTBUFFERLEN = 65536;
 
@@ -529,7 +530,7 @@ public:
 	bool MfDataToBuffer(const char* data, int len)		/*供调用者插入数据，插入数据到发送缓冲区*/ { return MdClientSock->MfDataToBuffer(data, len); }
 	bool MfSendMsg(int MsgId, const char* data, int len)/*发消息*/ { return MdClientSock->MfSendMsg(MsgId, data, len); }
 	const char* MfGetRecvBufferP()						/*供使用者处理数据，取得接收缓冲区原始指针*/ { return MdClientSock->MfGetRecvBufP(); }
-	bool MfPopFrontMsg(char* Buff, int BuffLen)								/*供使用者处理数据，第一条信息移出缓冲区*/ { return MdClientSock->MfPopFrontMsg(Buff, BuffLen); }
+	bool MfPopFrontMsg(char* Buff, int BuffLen)			/*供使用者处理数据，第一条信息移出缓冲区*/ { return MdClientSock->MfPopFrontMsg(Buff, BuffLen); }
 
 public:
 	bool RegMsg(int MsgId, MsgFunType fun, bool IsDefault = false)
@@ -600,6 +601,7 @@ public:
 	bool MfCreateAddLink(ClientConf Conf);		// 如果需要建立新的连接，就new一个ClientLink，同时记录连接的目标，然后加入列表是，设置client可用
 	void MfCloseLink(std::string Linkname);							// 关闭某个连接
 	bool MfSendMsg(std::string name, int MsgId, const char* data, int len);
+	void ClientSocketObjOp(const std::string & name, std::function<bool(CSocketObj*)> Fun); 
 public:
 	bool MfLinkIsSurvive(std::string name);							// 某个服务是否活着
 private:
@@ -609,7 +611,7 @@ public:
 	bool RegMsg(std::string LinkName, int MsgId, MsgFunType fun, bool IsDefault = false);
 };
 
-typedef std::function<void()> OnCloseFunType;
+typedef std::function<void(CSocketObj*)> OnCloseFunType;
 struct ServiceConf
 {
 	std::string			Fun;	
@@ -623,7 +625,7 @@ struct ServiceConf
 	int					RawSocketSendLen = 0;		// socket本身缓冲区长度
 	int					RawSocketRecvLen = 0;		// socket本身缓冲区长度
 	bool				SelfDealPkgHead = 0;		// 是否自己处理包头
-	OnCloseFunType*		OnCloseFun = nullptr;
+	OnCloseFunType		OnCloseFun = nullptr;
 };
 
 class CServiceNoBlock
@@ -650,7 +652,7 @@ protected:
 	int					MdPublicCacheLen = 0;	// 每条处理线程一个公共缓冲区,处理数据取出时也是trylock,然后把消息写到这里
 	std::vector<char*>	MdPublicCache;			// 这样dispose线程就不会小概率卡住了
 
-	OnCloseFunType* OnCloseFun = nullptr;
+	OnCloseFunType OnCloseFun = nullptr;
 
 protected:			// 用来在服务启动时，等待其他所有线程启动后，再启动Accept线程
 	Barrier MdBarrier1;
@@ -666,7 +668,7 @@ public:
 	bool Mf_NoBlock_Stop();							// 遍历所有连接
 	void VisitSocketObj(std::function<bool(CSocketObj*)> Fun);
 	bool Mf_SendMsgByUid(int64_t Uid, int MsgId, char* Data, int len);
-	void SetOncloseFun(OnCloseFunType* Fun) { OnCloseFun = Fun; }
+	void SetOncloseFun(OnCloseFunType Fun) { OnCloseFun = Fun; }
 protected:
 	bool Mf_Init_ListenSock();		// 初始化套接字
 private:
@@ -707,7 +709,7 @@ protected:
 	int					MdPublicCacheLen = 0;	// 每条处理线程一个公共缓冲区,处理数据取出时也是trylock,然后把消息写到这里
 	std::vector<char*>	MdPublicCache;			// 这样dispose线程就不会小概率卡住了
 
-	OnCloseFunType* OnCloseFun = nullptr;
+	OnCloseFunType OnCloseFun = nullptr;
 
 protected:			// 用来在服务启动时，等待其他所有线程启动后，再启动Accept线程
 	Barrier MdBarrier1;
@@ -728,7 +730,7 @@ public:
 	void Mf_Epoll_Stop();
 	void VisitSocketObj(std::function<bool(CSocketObj*)> Fun);
 	bool Mf_SendMsgByUid(int64_t Uid, int MsgId, const char* Data, int len);
-	void SetOncloseFun(OnCloseFunType* Fun) { OnCloseFun = Fun; }
+	void SetOncloseFun(OnCloseFunType Fun) { OnCloseFun = Fun; }
 protected:
 	bool Mf_Init_ListenSock();		// 初始化套接字
 private:

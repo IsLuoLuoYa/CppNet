@@ -65,6 +65,7 @@
 #include <list>
 #include <type_traits>
 #include "google/protobuf/message.h"
+#include "ObjectPool.h"
 
 static const int DEFAULTBUFFERLEN = 65536;
 
@@ -100,7 +101,7 @@ public:
 };
 
 class CSocketObj;
-typedef std::function<void(CSocketObj*, void*, int)> MsgFunType;
+typedef std::function<void(CSocketObj*, char*, int, int)> MsgFunType;
 
 
 #pragma pack(push, 1)
@@ -180,59 +181,63 @@ template <class T>
 class CMemoryPool
 {
 private:
-	int				MdObjectLen;			// 一个T类型对象的长度
-	int				MdNumbers;				// 能分配多少个对象
-	char* MdPPool;				// 整个内存池所占用的空间地址起点
-	CObj* MdObjectLinkHead;		// 内存池被转化为链表后的链表头
-	std::mutex		MdMtx;					// 使用该内存池时的锁
-	int				MdLackCount;			// 内存池使用不足时计数
+	int							MdObjectLen;			// 一个T类型对象的长度
+	int							MdNumbers;				// 单个池能分配多少个对象
+	int							MdSingleTotalLen;		// 单个池总长
+	int							TotalLeftNum;			// 所有池剩余的数量
+	vector<St_SingleMemPool>	Pools;					// 池集合								
+	mutex						MdMtx;					// 使用该内存池时的锁
+	int							CheckDeleteCount = 0;	// 每归还多少个, 检查一次释放池
 public:
-	CMemoryPool(int numbers);
+	CMemoryPool(int numbers = 1);
 	~CMemoryPool();
 	CMemoryPool(const CMemoryPool&) = delete;
 	CMemoryPool& operator=(const CMemoryPool&) = delete;
-	T* MfApplyMemory();			// 申请一块内存
-	void	MfReturnMemory(T* obj);		// 归还一块内存
+	T* MfApplyMemory();					// 申请一块内存
+	void MfReturnMemory(T* obj);		// 归还一块内存
+	inline int GetCap() { return MdNumbers * int(Pools.size()); }
+	inline int GetLeftNum() { return TotalLeftNum; }
 };
 
 template <class T>
-CMemoryPool<T>::CMemoryPool(int numbers) :MdObjectLen(0), MdNumbers(numbers), MdPPool(nullptr), MdLackCount(0)
+CMemoryPool<T>::CMemoryPool(int numbers) :MdObjectLen(0), MdNumbers(numbers)
 {
-	if (0 >= MdNumbers)								// 数量 没有被声明为正确的值话，就退出
+	if (0 >= MdNumbers)						// 数量 没有被声明为正确的值话，就退出
 	{
-		return;
+		MdNumbers = 1;
 	}
 	MdObjectLen = sizeof(T);				// 确定一个对象的长度
 	if (8 > MdObjectLen)					// 兼容64位
-	{
-		printf("WARRING!\tmsg: MDObjectLen < 8，already set MDObjectLen is 8\n11");
 		MdObjectLen = 8;
-	}
-	MdPPool = new char[(MdObjectLen + 1) * MdNumbers] { 0 };					// 申请对象池的空间		对象长度*数量
-	// 这里要解释一下为了多申请1字节的空间
-	// 在调用掉该对象从对象池中返回对象池时，可能会有内存池中没有内存可分配的情况
-	// 此时的行为应该是用new来申请空间，然后返回内存
-	// 为了区分返回的内存是由内存池还是new分配，在分配的内存前加1字节的标志
-	// 因为在对象池在申请时所有字节都已经设0，所以这1字节的标志为0就代表是内存池分配
-	// new时，主动把该标志设为1，这样归还对象时，根据该标志来执行不同的操作
+	MdSingleTotalLen = MdObjectLen * MdNumbers;
+	Pools.reserve(32);
 
-	// 接下来把申请的对象池初始化成一个链表
-	MdObjectLinkHead = (CObj*)(MdPPool + 1);
-	CObj* temp = MdObjectLinkHead;
-	for (int i = 0; i < MdNumbers; ++i)
+	St_SingleMemPool NewPool;
+	NewPool.pPtr = new char[MdSingleTotalLen] { 0 };		// 对象长度* 数量
+	NewPool.LinkHeadV2 = (CObj*)(NewPool.pPtr);
+	NewPool.LeftNum = MdNumbers;
+	TotalLeftNum += MdNumbers;
+
+	// 初始化成一个链表
+	auto& LinkHeadRef = NewPool.LinkHeadV2;
+	for (int i = 0; i < MdNumbers - 1; ++i)
 	{
-		temp->MdNext = (CObj*)((char*)MdObjectLinkHead + (i * (MdObjectLen + 1)));
-		temp = (CObj*)((char*)MdObjectLinkHead + (i * (MdObjectLen + 1)));
+		CObj* curr = (CObj*)((char*)LinkHeadRef + i * MdObjectLen);
+		CObj* next = (CObj*)((char*)LinkHeadRef + (i + 1) * MdObjectLen);
+		curr->MdNext = next;
 	}
-	((CObj*)(MdPPool + (MdNumbers - 1) * (MdObjectLen + 1)))->MdNext = nullptr;
+	CObj* last = (CObj*)((char*)LinkHeadRef + (MdNumbers - 1) * MdObjectLen);
+	last->MdNext = nullptr;
+
+	Pools.push_back(NewPool);
 }
 
 template <class T>
 CMemoryPool<T>::~CMemoryPool()
 {
-	if (!MdPPool)
-		delete MdPPool;					// 释放对象池的空间
-	MdPPool = nullptr;
+	for (auto& It : Pools)
+		delete[] It.pPtr;
+	Pools.clear();
 }
 
 template <class T>
@@ -240,48 +245,99 @@ T* CMemoryPool<T>::MfApplyMemory()
 {
 	char* ret = nullptr;
 	std::unique_lock<std::mutex> lk(MdMtx);
-	if (nullptr != MdObjectLinkHead)
+
+	St_SingleMemPool* pSingePool = nullptr;
+	for (auto& It : Pools)
 	{
-		ret = (char*)MdObjectLinkHead;
-		MdObjectLinkHead = MdObjectLinkHead->MdNext;
-		return (T*)ret;
+		if (!It.pPtr) [[unlikely]]
+			continue;
+		if (!It.LinkHeadV2) [[unlikely]]
+			continue;
+		pSingePool = &It;
+		break;
 	}
-	else
+	if (!pSingePool) [[unlikely]]
 	{
-		lk.unlock();
-		++MdLackCount;
-		ret = new char[MdObjectLen + 1];
-		ret[0] = 1;
-		return (T*)(ret + 1);
+		St_SingleMemPool NewPool;
+		NewPool.pPtr = new char[MdSingleTotalLen] { 0 };		// 对象长度* 数量
+		NewPool.LinkHeadV2 = (CObj*)(NewPool.pPtr);
+		NewPool.LeftNum = MdNumbers;
+		TotalLeftNum += MdNumbers;
+
+		// 初始化成一个链表
+		auto& LinkHeadRef = NewPool.LinkHeadV2;
+		for (int i = 0; i < MdNumbers - 1; ++i)
+		{
+			CObj* curr = (CObj*)((char*)LinkHeadRef + i * MdObjectLen);
+			CObj* next = (CObj*)((char*)LinkHeadRef + (i + 1) * MdObjectLen);
+			curr->MdNext = next;
+		}
+		CObj* last = (CObj*)((char*)LinkHeadRef + (MdNumbers - 1) * MdObjectLen);
+		last->MdNext = nullptr;
+
+		Pools.push_back(NewPool);
+		pSingePool = &(*Pools.rbegin());
 	}
-	return nullptr;
+	if (!pSingePool) [[unlikely]]
+		return nullptr;
+
+	--TotalLeftNum;
+	--pSingePool->LeftNum;
+	ret = (char*)(pSingePool->LinkHeadV2);
+	pSingePool->LinkHeadV2 = pSingePool->LinkHeadV2->MdNext;
+	lk.unlock();
+	return (T*)ret;
 }
 
 template <class T>
 void CMemoryPool<T>::MfReturnMemory(T* obj)
 {
-	if (nullptr == obj)
-		return;
 	std::unique_lock<std::mutex> lk(MdMtx);
-	//if (0 == *((char*)obj - 1))
+	for (auto& It : Pools)
 	{
-		if (nullptr == MdObjectLinkHead)
+		if (It.pPtr <= (char*)obj && (char*)obj < It.pPtr + MdSingleTotalLen)
 		{
-			((CObj*)obj)->MdNext = nullptr;
-			MdObjectLinkHead = (CObj*)obj;
+			((CObj*)obj)->MdNext = It.LinkHeadV2;
+			It.LinkHeadV2 = (CObj*)obj;
+			++TotalLeftNum;
+			++It.LeftNum;
+			break;
 		}
-		else
-		{
-			((CObj*)obj)->MdNext = MdObjectLinkHead->MdNext;
-			MdObjectLinkHead = (CObj*)obj;
-		}
-		return;
 	}
-	/*else
+
+	do
 	{
-		lk.unlock();
-		delete[]((char*)obj - 1);
-	}*/
+		++CheckDeleteCount;
+		if (CheckDeleteCount < 50) [[likely]]
+			break;
+		CheckDeleteCount = 0;
+		if (Pools.size() <= 1)
+			break;
+
+		vector<int> Indexs;
+		Indexs.reserve(Pools.size());
+		for (int i = int(Pools.size()) - 1; i > 2; --i)
+		{
+			if (Pools[i].LeftNum < MdNumbers)
+				continue;
+			Indexs.push_back(i);
+		}
+
+		for (auto It = Indexs.begin(); It != Indexs.end(); ++It)
+		{
+			if (Pools[*It].pPtr) [[likely]]
+			{
+				delete[] Pools[*It].pPtr;
+				//printf("%d \n", *It);
+			}
+			std::swap(Pools[*It], Pools.back());
+			Pools.pop_back();
+			TotalLeftNum -= MdNumbers;
+		}
+		break;
+	} while (false);
+
+	lk.unlock();
 }
 
 template <class T>
@@ -290,6 +346,7 @@ class CObjectPool
 private:
 	CMemoryPool<T>	MdMemoryPool;
 public:
+	CObjectPool() :MdMemoryPool(16) {};
 	CObjectPool(int numbers) :MdMemoryPool(numbers) {};
 	~CObjectPool() {};
 	CObjectPool(const CObjectPool&) = delete;
@@ -502,6 +559,7 @@ struct ClientConf
 	int					SecondBufferRecvLen = DEFAULTBUFFERLEN;// 第二缓冲区长度
 	int					RawSocketSendLen = 0;		// socket本身缓冲区长度
 	int					RawSocketRecvLen = 0;		// socket本身缓冲区长度
+	bool				SelfDealPkgHead = 0;		// 是否自己处理包头
 };
 
 class CClientLink
@@ -511,6 +569,7 @@ private:
 	CSocketObj*				MdClientSock = 0;	// 客户连接对象
 	std::atomic<int>		MdIsConnect = 0;	// 表示是否连接成功	
 	std::unordered_map<int, MsgFunType> MsgDealFuncMap;
+	MsgFunType				DefaultMsg = nullptr;
 	bool					SelfDealPkgHead;	// 创建者自己处理包头数据
 private:
 public:
@@ -527,29 +586,51 @@ public:
 	bool MfDataToBuffer(const char* data, int len)		/*供调用者插入数据，插入数据到发送缓冲区*/ { return MdClientSock->MfDataToBuffer(data, len); }
 	bool MfSendMsg(int MsgId, const char* data, int len)/*发消息*/ { return MdClientSock->MfSendMsg(MsgId, data, len); }
 	const char* MfGetRecvBufferP()						/*供使用者处理数据，取得接收缓冲区原始指针*/ { return MdClientSock->MfGetRecvBufP(); }
-	bool MfPopFrontMsg(char* Buff, int BuffLen)								/*供使用者处理数据，第一条信息移出缓冲区*/ { return MdClientSock->MfPopFrontMsg(Buff, BuffLen); }
+	bool MfPopFrontMsg(char* Buff, int BuffLen)			/*供使用者处理数据，第一条信息移出缓冲区*/ { return MdClientSock->MfPopFrontMsg(Buff, BuffLen); }
 
 public:
-	bool RegMsg(int MsgId, MsgFunType fun)
+	bool RegMsg(int MsgId, MsgFunType fun, bool IsDefault = false)
 	{
-		if (MsgDealFuncMap.find(MsgId) != MsgDealFuncMap.end())
-			return false;
-		MsgDealFuncMap[MsgId] = fun;
+		if (IsDefault)
+		{
+			DefaultMsg = fun;
+		}
+		else
+		{
+			if (MsgDealFuncMap.find(MsgId) != MsgDealFuncMap.end())
+				return false;
+			MsgDealFuncMap[MsgId] = fun;
+		}
 		return true;
 	}
 
-	virtual void MfVNetMsgDisposeFun(SOCKET sock, CSocketObj* Ser, CNetMsgHead* msg, std::thread::id& threadid)
+	void MfVNetMsgDisposeFun(SOCKET sock, CSocketObj* Ser, CNetMsgHead* msg, std::thread::id& threadid)
 	{
-		auto Fun = MsgDealFuncMap.find(msg->MdCmd);
-		if (Fun == MsgDealFuncMap.end())
-		{									
+		MsgFunType Fun = nullptr;
+		do
+		{
+			auto TmpIt = MsgDealFuncMap.find(msg->MdCmd);
+			if (TmpIt != MsgDealFuncMap.end())
+			{
+				Fun = TmpIt->second;
+				break;
+			}
+
+			if (DefaultMsg)
+			{
+				Fun = DefaultMsg;
+				break;
+			}
+
+		} while (0);
+
+		if (!Fun)
 			return;
-		}
 
 		if (SelfDealPkgHead)
-			Fun->second(Ser, ((char*)msg) + sizeof(CNetMsgHead), static_cast<int>(msg->MdLen - sizeof(CNetMsgHead)));
+			Fun(Ser, ((char*)msg), msg->MdLen, msg->MdLen - sizeof(CNetMsgHead));
 		else
-			Fun->second(Ser, msg, msg->MdLen);	
+			Fun(Ser, ((char*)msg) + sizeof(CNetMsgHead), msg->MdLen, msg->MdLen - sizeof(CNetMsgHead));
 	}
 };
 
@@ -576,16 +657,17 @@ public:
 	bool MfCreateAddLink(ClientConf Conf);		// 如果需要建立新的连接，就new一个ClientLink，同时记录连接的目标，然后加入列表是，设置client可用
 	void MfCloseLink(std::string Linkname);							// 关闭某个连接
 	bool MfSendMsg(std::string name, int MsgId, const char* data, int len);
+	void ClientSocketObjOp(const std::string & name, std::function<bool(CSocketObj*)> Fun); 
 public:
 	bool MfLinkIsSurvive(std::string name);							// 某个服务是否活着
 private:
 	void MfSendThread();											// 发送线程，循环调用send，收发线程根据是否可用标志确定行为
 	void MfRecvThread();											// 接收线程，循环调用recv，收发线程根据是否可用标志确定行为
 public:
-	bool RegMsg(std::string LinkName, int MsgId, MsgFunType fun);
+	bool RegMsg(std::string LinkName, int MsgId, MsgFunType fun, bool IsDefault = false);
 };
 
-typedef std::function<void()> OnCloseFunType;
+typedef std::function<void(CSocketObj*)> OnCloseFunType;
 struct ServiceConf
 {
 	std::string			Fun;	
@@ -599,7 +681,7 @@ struct ServiceConf
 	int					RawSocketSendLen = 0;		// socket本身缓冲区长度
 	int					RawSocketRecvLen = 0;		// socket本身缓冲区长度
 	bool				SelfDealPkgHead = 0;		// 是否自己处理包头
-	OnCloseFunType*		OnCloseFun = nullptr;
+	OnCloseFunType		OnCloseFun = nullptr;
 };
 
 class CServiceNoBlock
@@ -621,11 +703,12 @@ protected:
 	bool										SelfDealPkgHead;			// 创建者自己处理包头数据
 	
 	std::unordered_map<int, MsgFunType>			MsgDealFuncMap;				// 注册的消息列表
+	MsgFunType									DefaultMsg = nullptr;
 
 	int					MdPublicCacheLen = 0;	// 每条处理线程一个公共缓冲区,处理数据取出时也是trylock,然后把消息写到这里
 	std::vector<char*>	MdPublicCache;			// 这样dispose线程就不会小概率卡住了
 
-	OnCloseFunType* OnCloseFun = nullptr;
+	OnCloseFunType OnCloseFun = nullptr;
 
 protected:			// 用来在服务启动时，等待其他所有线程启动后，再启动Accept线程
 	Barrier MdBarrier1;
@@ -635,13 +718,13 @@ protected:			// 这一组变量，用来在服务结束时，按accept recv disp
 	Barrier MdBarrier4;		// send线程			和	dispose线程			的同步和前面不同，用屏障的概念等待多个线程来继续执行
 public:
 	CServiceNoBlock();
-	virtual ~CServiceNoBlock();
+	~CServiceNoBlock();
 	void Init();
 	bool Mf_NoBlock_Start(ServiceConf Conf);		// 启动收发处理线程的非阻塞版本
 	bool Mf_NoBlock_Stop();							// 遍历所有连接
 	void VisitSocketObj(std::function<bool(CSocketObj*)> Fun);
 	bool Mf_SendMsgByUid(int64_t Uid, int MsgId, char* Data, int len);
-	void SetOncloseFun(OnCloseFunType* Fun) { OnCloseFun = Fun; }
+	void SetOncloseFun(OnCloseFunType Fun) { OnCloseFun = Fun; }
 protected:
 	bool Mf_Init_ListenSock();		// 初始化套接字
 private:
@@ -652,49 +735,70 @@ private:
 	void Mf_NoBlock_ClientJoin(std::thread::id threadid, int SeqNumber);	// 客户端加入正式列表
 	void Mf_NoBlock_ClientLeave(std::thread::id threadid, int SeqNumber);	// 客户端移除正式列表
 public:
-	bool RegMsg(int MsgId, MsgFunType fun)
-	{
-		if (MsgDealFuncMap.find(MsgId) != MsgDealFuncMap.end())
-			return false;
-		MsgDealFuncMap[MsgId] = fun;
-		return true;
-	}
+	bool RegMsg(int MsgId, MsgFunType fun, bool IsDefault = false);
 
-	virtual void MfVNetMsgDisposeFun(SOCKET sock, CSocketObj* cli, CNetMsgHead* msg, std::thread::id& threadid)
-	{
-		auto Fun = MsgDealFuncMap.find(msg->MdCmd);
-		if (Fun == MsgDealFuncMap.end())
-		{											
-			return;
-		}
-
-
-		if (SelfDealPkgHead)
-			Fun->second(cli, ((char*)msg) + sizeof(CNetMsgHead), static_cast<int>(msg->MdLen - sizeof(CNetMsgHead)));
-		else
-			Fun->second(cli, msg, msg->MdLen);
-	}
+	void MfVNetMsgDisposeFun(SOCKET sock, CSocketObj* cli, CNetMsgHead* msg, std::thread::id& threadid);
 };
 
 #ifndef WIN32
 
-class CServiceEpoll :public CServiceNoBlock
+class CServiceEpoll
 {
+protected:
+	SOCKET										MdListenSock;				// 监听套接字
+	ServiceConf									MdConf;						// 各种参数
+	CTimer										MdHeartBeatTestInterval;	// 心跳间隔检测用到的计时器
+	std::vector<CObjectPool<CSocketObj>*>		Md_CSocketObj_POOL;			// 客户端对象的对象池
+	std::unordered_map<SOCKET, CSocketObj*>* MdPClientJoinList;			// 非正式客户端缓冲列表，等待加入正式列表，同正式客户列表一样，一个线程对应一个加入列表
+	std::mutex* MdPClientJoinListMtx;		// 非正式客户端列表的锁
+	std::unordered_map<SOCKET, CSocketObj*>* MdPClientFormalList;		// 正式的客户端列表，一个线程对应一个map[],存储当前线程的服务对象,map[threadid]找到对应map，map[threadid][socket]找出socket对应的数据
+	std::shared_mutex* MdPClientFormalListMtx;		// 为一MdPEachDisoposeThreadOfServiceObj[]添加sock时，应MdEachThreadOfMtx[].lock
+	std::unordered_map<int64_t, CSocketObj*>* MdPClientFormalList_LinkUid;// 每个CSocketObj用一个自增的uid来索引以下
+	int* MdLinkUidCount;				// 自增的uid
+	std::unordered_map<SOCKET, CSocketObj*>* MdClientLeaveList;			// 等待从正式列表中移除的缓冲列表
+	std::mutex* MdClientLeaveListMtx;		// 移除列表的锁
+	CThreadPool* MdThreadPool;
+	bool										SelfDealPkgHead;			// 创建者自己处理包头数据
+
+	std::unordered_map<int, MsgFunType>			MsgDealFuncMap;				// 注册的消息列表
+	MsgFunType									DefaultMsg = nullptr;
+	int					MdPublicCacheLen = 0;	// 每条处理线程一个公共缓冲区,处理数据取出时也是trylock,然后把消息写到这里
+	std::vector<char*>	MdPublicCache;			// 这样dispose线程就不会小概率卡住了
+
+	OnCloseFunType OnCloseFun = nullptr;
+
+protected:			// 用来在服务启动时，等待其他所有线程启动后，再启动Accept线程
+	Barrier MdBarrier1;
+protected:			// 这一组变量，用来在服务结束时，按accept recv dispose send的顺序来结束线程以保证不出错
+	Barrier MdBarrier2;		// accept线程		和	recv线程			的同步变量		！！！！！在epoll中未被使用！！！！！
+	Barrier MdBarrier3;		// recv线程			和	所有dispos线程		的同步变量
+	Barrier MdBarrier4;		// send线程			和	dispose线程			的同步和前面不同，用屏障的概念等待多个线程来继续执行
+
 private:
 	std::vector<SOCKET>			MdEpoll_In_Fd;		// epoll句柄
 	std::vector<epoll_event*>	MdEpoll_In_Event;	// 接收线程用到的结构集合
 	int							MdThreadAvgPeoples;	// 每个线程的平均人数
 public:
 	CServiceEpoll();
-	virtual ~CServiceEpoll();
+	~CServiceEpoll();
+	void Init();
 	bool Mf_Epoll_Start(ServiceConf Conf);
 	void Mf_Epoll_Stop();
+	void VisitSocketObj(std::function<bool(CSocketObj*)> Fun);
+	bool Mf_SendMsgByUid(int64_t Uid, int MsgId, const char* Data, int len);
+	void SetOncloseFun(OnCloseFunType Fun) { OnCloseFun = Fun; }
+protected:
+	bool Mf_Init_ListenSock();		// 初始化套接字
 private:
 	void Mf_Epoll_AcceptThread();							// 等待客户端连接的线程
 	void Mf_Epoll_RecvAndDisposeThread(int SeqNumber);		// 处理线程
 	void Mf_Epoll_SendThread();								// 发线程
 	void Mf_Epoll_ClientJoin(std::thread::id threadid, int SeqNumber);	// 客户端加入正式列表
 	void Mf_Epoll_ClientLeave(std::thread::id threadid, int SeqNumber);	// 客户端移除正式列表
+
+public:
+	bool RegMsg(int MsgId, MsgFunType fun, bool IsDefault = false);
+	void MfVNetMsgDisposeFun(SOCKET sock, CSocketObj* cli, CNetMsgHead* msg, std::thread::id& threadid);
 };
 
 #endif // !WIN32
